@@ -25,6 +25,10 @@ use std::fmt::Debug;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 
+/// Represents the header of a request sent to the pgmoneta server.
+///
+/// Contains metadata such as the command code, client version,
+/// formatting preferences, and security settings.
 #[derive(Serialize, Clone, Debug)]
 struct RequestHeader {
     #[serde(rename = "Command")]
@@ -41,6 +45,9 @@ struct RequestHeader {
     encryption: u8,
 }
 
+/// A wrapper structure that combines a request header with its specific payload.
+///
+/// This is the final serialized object sent over the TCP connection to pgmoneta.
 #[derive(Serialize, Clone, Debug)]
 struct PgmonetaRequest<R>
 where
@@ -52,8 +59,16 @@ where
     request: R,
 }
 
+/// Handles network communication with the backend pgmoneta server.
+///
+/// This client manages the lifecycle of a request: building headers,
+/// authenticating, opening a TCP stream, writing the payload, and reading the response.
 pub struct PgmonetaClient;
 impl PgmonetaClient {
+    /// Constructs a standard request header for a given command.
+    ///
+    /// The header includes the current local timestamp and defaults to
+    /// no encryption or compression, expecting a JSON response.
     fn build_request_header(command: u32) -> RequestHeader {
         let timestamp = Local::now().format("%Y%m%d%H%M%S").to_string();
         RequestHeader {
@@ -66,6 +81,16 @@ impl PgmonetaClient {
         }
     }
 
+    /// Establishes an authenticated TCP connection to the pgmoneta server.
+    ///
+    /// Looks up the provided `username` in the configuration to find the encrypted
+    /// password, decrypts it using the master key, and initiates the connection.
+    ///
+    /// # Arguments
+    /// * `username` - The admin username requesting the connection.
+    ///
+    /// # Returns
+    /// An authenticated `TcpStream` ready for read/write operations.
     async fn connect_to_server(username: &str) -> anyhow::Result<TcpStream> {
         let config = CONFIG.get().expect("Configuration should be enabled");
         let security_util = SecurityUtil::new();
@@ -94,6 +119,13 @@ impl PgmonetaClient {
         Ok(stream)
     }
 
+    /// Writes a serialized JSON request string to the active TCP stream.
+    ///
+    /// Protocol flow:
+    /// 1. Writes the compression flag.
+    /// 2. Writes the encryption flag.
+    /// 3. Writes the length of the payload.
+    /// 4. Writes the exact payload bytes.
     async fn write_request(request_str: &str, stream: &mut TcpStream) -> anyhow::Result<()> {
         let mut request_buf = Vec::new();
         request_buf.write_i32(request_str.len() as i32).await?;
@@ -105,6 +137,13 @@ impl PgmonetaClient {
         Ok(())
     }
 
+    /// Reads the response payload from the TCP stream.
+    ///
+    /// Protocol flow:
+    /// 1. Reads the compression flag.
+    /// 2. Reads the encryption flag.
+    /// 3. Reads the payload length.
+    /// 4. Reads the exact number of bytes specified by the length.
     async fn read_response(stream: &mut TcpStream) -> anyhow::Result<String> {
         let _compression = stream.read_u8().await?;
         let _encryption = stream.read_u8().await?;
@@ -115,6 +154,15 @@ impl PgmonetaClient {
         Ok(response_str)
     }
 
+    /// End-to-end wrapper for sending a request to the pgmoneta server and awaiting its response.
+    ///
+    /// # Arguments
+    /// * `username` - The admin username making the request.
+    /// * `command` - The numeric command code (e.g., `Command::INFO`).
+    /// * `request` - The specific request payload object.
+    ///
+    /// # Returns
+    /// The raw string response from the pgmoneta server.
     async fn forward_request<R>(username: &str, command: u32, request: R) -> anyhow::Result<String>
     where
         R: Serialize + Clone + Debug,

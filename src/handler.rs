@@ -29,6 +29,10 @@ use rmcp::{
 use serde_json::Map;
 use serde_json::Value;
 
+/// The core handler for incoming Model Context Protocol (MCP) requests.
+///
+/// This struct routes MCP tool calls from the client (like an AI model)
+/// to the appropriate internal functions that communicate with pgmoneta.
 #[derive(Clone)]
 pub struct PgmonetaHandler {
     tool_router: ToolRouter<PgmonetaHandler>,
@@ -36,12 +40,14 @@ pub struct PgmonetaHandler {
 
 #[tool_router]
 impl PgmonetaHandler {
+    /// Creates a new instance of the `PgmonetaHandler` with an initialized tool router.
     pub fn new() -> Self {
         Self {
             tool_router: Self::tool_router(),
         }
     }
 
+    /// Simple ping tool to verify the MCP server is responsive.
     #[tool(description = "Say hello to the client")]
     fn say_hello(&self) -> Result<CallToolResult, McpError> {
         Ok(CallToolResult::success(vec![Content::text(
@@ -49,6 +55,7 @@ impl PgmonetaHandler {
         )]))
     }
 
+    /// Tool for fetching detailed information about a specific backup.
     #[tool(
         description = "Get information of a backup using given backup ID and server name. \
     \"newest\", \"latest\" or \"oldest\" are also accepted as backup identifier.\
@@ -62,6 +69,7 @@ impl PgmonetaHandler {
         Self::_generate_call_tool_result(&result)
     }
 
+    /// Tool for listing available backups on a specified server.
     #[tool(description = "List backups of a server. \
         Specify asc or desc to determine the sorting order.\
         The backups are sorted in ascending order if not specified.")]
@@ -75,6 +83,9 @@ impl PgmonetaHandler {
 }
 
 impl PgmonetaHandler {
+    /// Parses the raw string response from pgmoneta into a JSON map.
+    ///
+    /// Ensures the response contains the required `Outcome` category key.
     fn _parse_and_check_result(result: &str) -> Result<Map<String, Value>, McpError> {
         let response: Map<String, Value> = serde_json::from_str(result).map_err(|e| {
             McpError::parse_error(format!("Failed to parse result {result}: {:?}", e), None)
@@ -88,6 +99,12 @@ impl PgmonetaHandler {
         Ok(response)
     }
 
+    /// Recursively translates numeric/raw fields in the pgmoneta response into human-readable formats.
+    ///
+    /// This includes:
+    /// * Formatting byte counts into human-readable file sizes (e.g., KB, MB).
+    /// * Converting LSNs (Log Sequence Numbers) into hex strings.
+    /// * Translating numeric enum codes (Compression, Encryption, Error) into descriptive strings.
     fn _translate_result<'a, M>(map: M) -> anyhow::Result<Map<String, Value>>
     where
         M: IntoIterator<Item = (&'a String, &'a Value)>,
@@ -173,6 +190,8 @@ impl PgmonetaHandler {
         Ok(trans_res)
     }
 
+    /// Wraps the parsed and translated pgmoneta response into a standardized `CallToolResult`
+    /// that can be sent back to the MCP client.
     fn _generate_call_tool_result(result: &str) -> Result<CallToolResult, McpError> {
         let res = Self::_parse_and_check_result(result)?;
         let trans_res = Self::_translate_result(&res).map_err(|e| {
@@ -196,6 +215,7 @@ impl Default for PgmonetaHandler {
 
 #[tool_handler]
 impl ServerHandler for PgmonetaHandler {
+    /// Provides the MCP initialization capabilities and metadata for this server.
     fn get_info(&self) -> ServerInfo {
         ServerInfo {
             protocol_version: ProtocolVersion::V_2024_11_05,
@@ -207,6 +227,7 @@ impl ServerHandler for PgmonetaHandler {
         }
     }
 
+    /// Handles the initial connection setup and handshake from an MCP client.
     async fn initialize(
         &self,
         _request: InitializeRequestParam,
