@@ -1,5 +1,9 @@
 # pgmoneta MCP
 
+<p align="center">
+  <img src="doc/images/logo.svg" alt="pgmoneta_mcp logo" width="256" />
+</p>
+
 **pgmoneta MCP** is the official pgmoneta MCP server built for [pgmoneta](https://pgmoneta.github.io/), a backup / restore solution for [PostgreSQL](https://www.postgresql.org).
 
 For now, this server allows you to query the backup info using natural language with your MCP client.
