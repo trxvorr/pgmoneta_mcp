@@ -23,6 +23,7 @@ rmcp = { version = "1.2", features = [
     "client",
     "transport-io",
     "transport-streamable-http-server",
+    "transport-streamable-http-client-reqwest",
     "auth",
     "elicitation",
     "schemars",
@@ -54,6 +55,7 @@ rpassword = "7.4.0"
 serde_ini = "0.2.0"
 tracing-appender = "0.2.4"
 syslog-tracing = "0.3.1"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 
 [target.'cfg(windows)'.dependencies]
 winlog2 = "0.3.2"

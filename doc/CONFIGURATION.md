@@ -26,3 +26,15 @@ The other section, called `[pgmoneta]`, is where you configure connection with `
 | :------- | :------ | :--- | :------- | :---------- |
 | host | | String | Yes | The address of pgmoneta instance |
 | port | | Int | Yes | The port of pgmoneta instance |
+
+## [llm]
+
+Optional. Configures the local LLM integration for AI-powered backup management.
+See [LOCAL_LLM.md](LOCAL_LLM.md) for detailed setup instructions.
+
+| Property | Default | Unit | Required | Description |
+| :------- | :------ | :--- | :------- | :---------- |
+| provider | | String | Yes | The LLM provider backend |
+| endpoint | | String | Yes | The URL of the LLM inference server |
+| model | llama3.1 (Ollama) | String | No | The model name to use for inference |
+| max_tool_rounds | 10 | Int | No | Maximum tool-calling iterations per user prompt |

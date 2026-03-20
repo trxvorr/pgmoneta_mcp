@@ -33,6 +33,7 @@ pub fn init_config() {
                 port: 5002,
             },
             admins,
+            llm: None,
         };
 
         CONFIG

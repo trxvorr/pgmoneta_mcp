@@ -252,6 +252,24 @@ Add the following to your Claude Desktop configuration file:
 
 Restart Claude Desktop and the pgmoneta tools will be available.
 
+## Using a local LLM
+
+You can also pair **pgmoneta_mcp** with a local LLM runtime for a fully local,
+tool-driven assistant workflow.
+
+Add an `[llm]` section to `pgmoneta-mcp.conf`:
+
+``` ini
+[llm]
+provider = ollama
+endpoint = http://localhost:11434
+model = llama3.1
+max_tool_rounds = 10
+```
+
+See the **Local LLM** and **Ollama** chapters in the [manual](https://github.com/pgmoneta/pgmoneta/tree/main/doc/manual/en) for the full setup,
+including model selection, validation, and configuration details.
+
 ## Verifying the Setup
 
 To verify that everything is working correctly:

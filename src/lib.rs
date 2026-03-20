@@ -26,9 +26,11 @@
 //! * **`security`**: Handles master key management, AES encryption, and SCRAM authentication.
 //! * **`utils`**: Provides shared helper functions.
 
+pub mod agent;
 pub mod configuration;
 pub mod constant;
 pub mod handler;
+pub mod llm;
 
 mod client;
 pub mod logging;

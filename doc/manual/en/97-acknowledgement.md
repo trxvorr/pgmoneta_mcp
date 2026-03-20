@@ -16,6 +16,7 @@ Austin Senna Wijaya <austinsenna@gmail.com>
 Trevor Jacob Mathews <trevorjacobmathews@gmail.com>
 Chen Shen <scisbeloved23@gmail.com>
 Nihal Kumar <collabwithnihal@gmail.com>
+Shikhar Soni <shikharish05@gmail.com>
 ```
 
 ## Committers

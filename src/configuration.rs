@@ -44,6 +44,8 @@ pub struct Configuration {
     pub pgmoneta: PgmonetaConfiguration,
     /// Parsed admin users mapping (username -> password).
     pub admins: HashMap<String, String>,
+    /// Optional configuration for the local LLM integration.
+    pub llm: Option<LlmConfiguration>,
 }
 
 /// Configuration properties for connecting to the remote `pgmoneta` instance.
@@ -95,6 +97,24 @@ pub struct PgmonetaMcpConfiguration {
     pub log_rotation_age: String,
 }
 
+/// Configuration properties for the local LLM integration.
+///
+/// This corresponds to the optional `[llm]` section in the configuration file,
+/// where you configure the connection to a local LLM inference server.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct LlmConfiguration {
+    /// The LLM provider backend. Required when `[llm]` is present.
+    pub provider: String,
+    /// The endpoint URL for the LLM server. Required when `[llm]` is present.
+    pub endpoint: String,
+    /// The model name to use for inference. Defaults to a provider-specific value.
+    #[serde(default)]
+    pub model: String,
+    /// Maximum number of tool-calling rounds per user prompt. Default: `10`.
+    #[serde(default = "default_llm_max_tool_rounds")]
+    pub max_tool_rounds: usize,
+}
+
 /// Loads the main configuration and user configuration from the specified file paths.
 ///
 /// The files are parsed as INI format and deserialized into the [`Configuration`] struct.
@@ -113,14 +133,15 @@ pub fn load_configuration(config_path: &str, user_path: &str) -> anyhow::Result<
         .add_source(config::File::with_name(config_path).format(FileFormat::Ini))
         .add_source(config::File::with_name(user_path).format(FileFormat::Ini))
         .build()?;
-    conf.try_deserialize::<Configuration>().map_err(|e| {
+    let conf = conf.try_deserialize::<Configuration>().map_err(|e| {
         anyhow!(
             "Error parsing configuration at path {}, user {}: {:?}",
             config_path,
             user_path,
             e
         )
-    })
+    })?;
+    normalize_configuration(conf)
 }
 
 /// Loads only the user configuration from the specified file path.
@@ -174,4 +195,43 @@ fn default_log_mode() -> String {
 
 fn default_log_rotation_age() -> String {
     "0".to_string()
+}
+
+fn default_llm_max_tool_rounds() -> usize {
+    10
+}
+
+fn normalize_configuration(mut conf: Configuration) -> anyhow::Result<Configuration> {
+    if let Some(llm) = conf.llm.as_mut() {
+        llm.provider = llm.provider.trim().to_string();
+        llm.endpoint = llm.endpoint.trim().to_string();
+        llm.model = llm.model.trim().to_string();
+
+        if llm.provider.is_empty() {
+            return Err(anyhow!("LLM provider must not be empty"));
+        }
+
+        if llm.endpoint.is_empty() {
+            return Err(anyhow!("LLM endpoint must not be empty"));
+        }
+
+        if llm.model.is_empty() {
+            llm.model = default_llm_model_for_provider(&llm.provider)?;
+        } else {
+            validate_llm_provider(&llm.provider)?;
+        }
+    }
+
+    Ok(conf)
+}
+
+fn default_llm_model_for_provider(provider: &str) -> anyhow::Result<String> {
+    match provider {
+        "ollama" => Ok("llama3.1".to_string()),
+        _ => Err(anyhow!("Unsupported LLM provider '{}'", provider)),
+    }
+}
+
+fn validate_llm_provider(provider: &str) -> anyhow::Result<()> {
+    default_llm_model_for_provider(provider).map(|_| ())
 }

@@ -21,6 +21,15 @@ Two binaries `pgmoneta-mcp-server` and `pgmoneta-mcp-admin` will be built.
 
 Check the `doc` directory for more details.
 
+## Local LLM Support
+
+**pgmoneta MCP** supports local installation of open-source LLM models that can run
+without network access. This allows AI-powered backup management using models like
+[Llama](https://ollama.com/library/llama3.1), [Qwen](https://ollama.com/library/qwen2.5),
+and [Kimi](https://ollama.com/library/kimi-k2) through [Ollama](https://ollama.com).
+
+See [doc/LOCAL_LLM.md](doc/LOCAL_LLM.md) for installation and configuration instructions.
+
 ## License
 
 [GNU General Public License v3.0](https://www.gnu.org/licenses/gpl-3.0.en.html)
