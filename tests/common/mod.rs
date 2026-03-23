@@ -10,9 +10,10 @@ static INIT_CONFIG: Once = Once::new();
 pub fn init_config() {
     INIT_CONFIG.call_once(|| {
         let security: SecurityUtil = SecurityUtil::new();
-        let master_key = security.load_master_key().expect("master key must exist");
+        let (master_password, master_salt) =
+            security.load_master_key().expect("master key must exist");
         let encrypted = security
-            .encrypt_to_base64_string(b"backup_pass", &master_key[..])
+            .encrypt_to_base64_string(b"backup_pass", &master_password, &master_salt)
             .expect("password encryption should succeed");
 
         let mut admins: HashMap<String, String> = HashMap::new();

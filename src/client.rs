@@ -23,8 +23,10 @@ use anyhow::anyhow;
 use chrono::Local;
 use serde::Serialize;
 use std::fmt::Debug;
+use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
+use tokio::time::timeout;
 
 fn parse_compression(compression: &str) -> u8 {
     match compression.to_lowercase().as_str() {
@@ -132,10 +134,12 @@ impl PgmonetaClient {
             .admins
             .get(username)
             .expect("Username should be found");
-        let master_key = security_util.load_master_key()?;
-        let password = String::from_utf8(
-            security_util.decrypt_from_base64_string(password_encrypted, &master_key[..])?,
-        )?;
+        let (master_password, master_salt) = security_util.load_master_key()?;
+        let password = String::from_utf8(security_util.decrypt_from_base64_string(
+            password_encrypted,
+            &master_password,
+            &master_salt,
+        )?)?;
         let stream = SecurityUtil::connect_to_server(
             &config.pgmoneta.host,
             config.pgmoneta.port,
@@ -146,12 +150,20 @@ impl PgmonetaClient {
         Ok(stream)
     }
 
-    async fn write_request(
+    /// Writes a management request to the provided stream.
+    ///
+    /// Handles compression, encryption, and base64 encoding of the payload
+    /// if configured, and then frames the message according to the
+    /// pgmoneta management protocol.
+    async fn write_request<W>(
         request_str: &str,
-        stream: &mut TcpStream,
+        stream: &mut W,
         compression: u8,
         encryption: u8,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<()>
+    where
+        W: tokio::io::AsyncWrite + Unpin,
+    {
         let security_util = SecurityUtil::new();
 
         let payload = if compression != Compression::NONE || encryption != Encryption::NONE {
@@ -170,46 +182,130 @@ impl PgmonetaClient {
             request_str.to_string()
         };
 
+        println!(
+            "[DEBUG] Sending framed management request: compression={}, encryption={}, len={}, JSON={}",
+            compression,
+            encryption,
+            payload.len(),
+            request_str
+        );
+
+
+
+        // pgmoneta management protocol:
+        // 1 byte compression + 1 byte encryption + 4 bytes length + payload
+
+        // Write compression
         stream.write_u8(compression).await?;
+
+        // Write encryption
         stream.write_u8(encryption).await?;
+
+        // Write payload length (4 bytes, Big Endian)
+        stream.write_u32(payload.len() as u32).await?;
+
+        // Write payload
         stream.write_all(payload.as_bytes()).await?;
-        stream.write_u8(0).await?;
+        stream.flush().await?;
+
+
+        tracing::debug!(
+            compression = compression,
+            encryption = encryption,
+            len = payload.len(),
+            "Request sent"
+        );
         Ok(())
     }
 
-    async fn read_response(stream: &mut TcpStream) -> anyhow::Result<String> {
-        let compression = stream.read_u8().await?;
-        let encryption = stream.read_u8().await?;
+    async fn read_response<R>(stream: &mut R) -> anyhow::Result<String>
+    where
+        R: tokio::io::AsyncRead + Unpin,
+    {
 
-        let mut buf = Vec::new();
-        loop {
-            let byte = stream.read_u8().await?;
-            if byte == 0 {
-                break;
+        // Read compression
+        let compression = match timeout(Duration::from_secs(10), stream.read_u8()).await {
+            Ok(Ok(c)) => c,
+            Ok(Err(e)) => {
+                return Err(anyhow!("Failed to read compression byte: {e}"));
             }
-            buf.push(byte);
+            Err(_) => {
+                return Err(anyhow!("Reading compression byte timed out"));
+            }
+        };
+
+        // Read encryption
+        let encryption = match timeout(Duration::from_secs(2), stream.read_u8()).await {
+            Ok(Ok(e)) => e,
+            Ok(Err(e)) => {
+                return Err(anyhow!("Failed to read encryption byte: {e}"));
+            }
+            Err(_) => {
+                return Err(anyhow!("Reading encryption byte timed out"));
+            }
+        };
+
+        // Read length
+        let len = match timeout(Duration::from_secs(2), stream.read_u32()).await {
+            Ok(Ok(l)) => l as usize,
+            Ok(Err(e)) => {
+                return Err(anyhow!("Failed to read message length: {e}"));
+            }
+            Err(_) => {
+                return Err(anyhow!("Reading message length timed out"));
+            }
+        };
+        println!(
+            "[DEBUG] Response frame header received: compression={}, encryption={}, len={}",
+            compression, encryption, len
+        );
+
+
+
+        // Read payload
+        let mut buf = vec![0u8; len];
+        match timeout(Duration::from_secs(10), stream.read_exact(&mut buf)).await {
+            Ok(Ok(_)) => {
+                println!(
+                    "[DEBUG] Full response payload received (len: {})",
+                    buf.len()
+                );
+            }
+            Ok(Err(e)) => {
+                return Err(anyhow!("Failed to read response payload: {e}"));
+            }
+            Err(_) => {
+                return Err(anyhow!("Reading response payload timed out"));
+            }
+        }
+
+        // Remove trailing null terminator if present
+        if buf.last() == Some(&0) {
+            buf.pop();
         }
 
         let security_util = SecurityUtil::new();
 
         if compression != Compression::NONE || encryption != Encryption::NONE {
             let data = security_util.base64_decode(std::str::from_utf8(&buf)?)?;
+            let mut decrypted = data.clone();
 
-            let decrypted = if encryption != Encryption::NONE {
-                security_util.decrypt_text_aes_gcm_bundle(&data, encryption)?
-            } else {
-                data
-            };
+            if encryption != Encryption::NONE {
+                decrypted = security_util.decrypt_text_aes_gcm_bundle(&data, encryption)?;
+            }
 
-            let decompressed = if compression != Compression::NONE {
-                CompressionUtil::decompress(&decrypted, compression)?
-            } else {
-                decrypted
-            };
+            let mut decompressed = decrypted;
+            if compression != Compression::NONE {
+                decompressed = CompressionUtil::decompress(&decompressed, compression)?;
+            }
 
-            String::from_utf8(decompressed).map_err(|e| anyhow!("Invalid UTF-8: {}", e))
+            let response_str =
+                String::from_utf8(decompressed).map_err(|e| anyhow!("Invalid UTF-8: {}", e))?;
+            Ok(response_str)
         } else {
-            String::from_utf8(buf).map_err(|e| anyhow!("Invalid UTF-8: {}", e))
+            let response_str =
+                String::from_utf8(buf).map_err(|e| anyhow!("Invalid UTF-8: {}", e))?;
+            Ok(response_str)
         }
     }
 
@@ -361,30 +457,53 @@ mod tests {
 
     #[tokio::test]
     async fn test_write_request_format() {
-        // Create a mock TCP stream using a buffer
-        let mut buffer = Vec::new();
+        use std::io::Cursor;
+        // Create a mock buffer
+        let mut buffer = Cursor::new(Vec::new());
         let request_str = r#"{"test":"data"}"#;
 
-        // Manually write what write_request would write
-        let mut temp_buf = Vec::new();
-        temp_buf.write_i32(request_str.len() as i32).await.unwrap();
-        temp_buf.write_all(request_str.as_bytes()).await.unwrap();
+        PgmonetaClient::write_request(
+            request_str,
+            &mut buffer,
+            Compression::NONE,
+            Encryption::NONE,
+        )
+        .await
+        .unwrap();
 
-        buffer.write_u8(Compression::NONE).await.unwrap();
-        buffer.write_u8(Encryption::NONE).await.unwrap();
-        buffer.write_all(&temp_buf).await.unwrap();
+        let buffer = buffer.into_inner();
 
-        // Verify the format
+        // Verify the format: Comp(1) + Enc(1) + Len(4) + Payload
         assert_eq!(buffer[0], Compression::NONE);
         assert_eq!(buffer[1], Encryption::NONE);
 
-        // Read length
-        let length = i32::from_be_bytes([buffer[2], buffer[3], buffer[4], buffer[5]]);
-        assert_eq!(length, request_str.len() as i32);
+        // Read length (4 bytes)
+        let length = u32::from_be_bytes([buffer[2], buffer[3], buffer[4], buffer[5]]);
+        assert_eq!(length as usize, request_str.len());
 
         // Verify payload
         let payload = String::from_utf8(buffer[6..].to_vec()).unwrap();
         assert_eq!(payload, request_str);
+    }
+
+    #[tokio::test]
+    async fn test_read_response_format() {
+        use std::io::Cursor;
+        let response_str = r#"{"outcome":"success"}"#;
+
+        // Prepare mock buffer: Comp(1) + Enc(1) + Len(4) + Payload
+        let mut buffer = Vec::new();
+        buffer.push(Compression::NONE);
+        buffer.push(Encryption::NONE);
+        buffer.extend_from_slice(&(response_str.len() as u32).to_be_bytes());
+        buffer.extend_from_slice(response_str.as_bytes());
+
+        let mut cursor = Cursor::new(buffer);
+        let result = PgmonetaClient::read_response(&mut cursor)
+            .await
+            .expect("Read should succeed");
+
+        assert_eq!(result, response_str);
     }
 
     #[test]

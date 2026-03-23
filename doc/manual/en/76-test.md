@@ -73,15 +73,15 @@ cargo test -- --nocapture
 
 #### Integration Tests
 
-Integration tests are located in `tests/integration_test.rs` and test the complete system with a running pgmoneta server.
+Integration tests are located in `tests/info_test.rs`, `tests/list_backup_test.rs`, and `tests/handler_test.rs`. They test the complete system with a running pgmoneta server.
 
 **Running integration tests**:
 ```bash
-# Run all integration tests (requires pgmoneta server)
-cargo test --test integration_test -- --ignored
+# Run all integration tests (requires pgmoneta stack)
+cargo test -- --ignored
 
 # Run specific integration test
-cargo test --test integration_test test_handler_say_hello -- --ignored
+cargo test --test info_test -- --ignored
 ```
 
 **Note**: Integration tests are marked with `#[ignore]` because they require:
@@ -141,7 +141,7 @@ Run `<PATH_TO_PGMONETA>/test/check.sh test -m <test_name>`. The script assumes t
 By default, Rust runs tests in parallel. For integration tests that share resources, run sequentially:
 
 ```bash
-cargo test --test integration_test -- --test-threads=1 --ignored
+cargo test -- --test-threads=1 --ignored
 ```
 
 It is recommended that you **ALWAYS** run tests before raising PR.

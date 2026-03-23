@@ -555,9 +555,9 @@ case "$SUBCOMMAND" in
         start_composed_container
         trap stop_composed_container EXIT
         if [[ -n "$MODULE_FILTER" ]]; then
-            cargo test --all-features -- --test-threads=1 --nocapture -- $MODULE_FILTER
+            cargo test --all-features -- --test-threads=1 --nocapture --include-ignored -- $MODULE_FILTER
         else
-            cargo test --all-features -- --test-threads=1 --nocapture
+            cargo test --all-features -- --test-threads=1 --nocapture --include-ignored
         fi
         ;;
     integration)
@@ -566,9 +566,9 @@ case "$SUBCOMMAND" in
         start_composed_container
         trap stop_composed_container EXIT
         if [[ -n "$MODULE_FILTER" ]]; then
-            cargo test --test "*" -- --test-threads=1 --nocapture -- $MODULE_FILTER
+            cargo test --test "*" -- --test-threads=1 --nocapture --include-ignored -- $MODULE_FILTER
         else
-            cargo test --test "*" -- --test-threads=1 --nocapture
+            cargo test --test "*" -- --test-threads=1 --nocapture --include-ignored
         fi
         ;;
     unit)
@@ -581,7 +581,7 @@ case "$SUBCOMMAND" in
     ci)
         trap ci_shutdown EXIT
         ci_setup
-        cargo test -- --test-threads=1 --nocapture
+        cargo test -- --test-threads=1 --nocapture --include-ignored
         ;;
     "")
         cleanup
@@ -590,9 +590,9 @@ case "$SUBCOMMAND" in
         start_composed_container
         trap stop_composed_container EXIT
         if [[ -n "$MODULE_FILTER" ]]; then
-            cargo test -- --test-threads=1 --nocapture -- $MODULE_FILTER
+            cargo test -- --test-threads=1 --nocapture --include-ignored -- $MODULE_FILTER
         else
-            cargo test -- --test-threads=1 --nocapture
+            cargo test -- --test-threads=1 --nocapture --include-ignored
         fi
         ;;
 esac

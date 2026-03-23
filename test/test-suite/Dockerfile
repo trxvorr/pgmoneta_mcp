@@ -32,9 +32,11 @@ COPY conf/pg_hba.conf /conf-postgres/pg_hba.conf
 COPY conf/setup.sql /conf-postgres/setup.sql
 
 # copy executables
-COPY --chmod=755 usr/bin/run-pgmoneta /usr/bin/run-pgmoneta
-COPY --chmod=755 usr/bin/run-postgresql /usr/bin/run-postgresql
-COPY --chmod=755 usr/bin/entry /usr/bin/entry
+COPY usr/bin/run-pgmoneta /usr/bin/run-pgmoneta
+COPY usr/bin/run-postgresql /usr/bin/run-postgresql
+COPY usr/bin/entry /usr/bin/entry
+
+RUN chmod 755 /usr/bin/run-pgmoneta /usr/bin/run-postgresql /usr/bin/entry
 
 # install needed packages
 RUN rpm -Uvh https://dl.fedoraproject.org/pub/epel/epel-release-latest-10.noarch.rpm \
@@ -51,7 +53,8 @@ RUN useradd -ms /bin/bash pgmoneta \
  && chown pgmoneta:pgmoneta /home/pgmoneta/.pgmoneta
 
 ## copy master key
-COPY --chown=pgmoneta:pgmoneta --chmod=600 ./master.key /home/pgmoneta/.pgmoneta/master.key
+COPY --chown=pgmoneta:pgmoneta ./master.key /home/pgmoneta/.pgmoneta/master.key
+RUN chmod 600 /home/pgmoneta/.pgmoneta/master.key
 
 RUN chown -R pgmoneta:pgmoneta /conf-pgmoneta /pgmoneta \
  && chown -R postgres:postgres /conf-postgres /pgdata /pgwal /pglog \

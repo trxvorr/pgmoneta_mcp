@@ -30,13 +30,21 @@ use rand::TryRngCore;
 use scram::ScramClient;
 use sha2::Sha256;
 use std::fs;
+use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
+use tokio::time::timeout;
 use zeroize::{Zeroize, Zeroizing};
+
+/// Represents a master key composition: (password, salt)
+pub type MasterKey = (Zeroizing<Vec<u8>>, Zeroizing<Vec<u8>>);
 
 const NONCE_LEN: usize = 12;
 const SALT_LEN: usize = 16;
-const PBKDF2_ITERATIONS: u32 = 600_000;
+/// Iterations for the first KDF step (Master Password + Master Salt -> Derived Master Key)
+const MASTER_PBKDF2_ITERATIONS: u32 = 600_000;
+/// Iterations for the second KDF step (Derived Master Key + File Salt -> Final Key)
+const FILE_PBKDF2_ITERATIONS: u32 = 1;
 const MAX_CIPHERTEXT_B64_LEN: usize = 1024 * 1024;
 
 use std::path::PathBuf;
@@ -82,12 +90,17 @@ impl SecurityUtil {
         Ok(self.base64_engine.decode(text)?)
     }
 
-    /// Loads the master key from the user's home directory (`~/.pgmoneta-mcp/master.key`).
+    /// Loads the master key (password) and salt from the user's home directory (`~/.pgmoneta-mcp/master.key`).
+    ///
+    /// The file is expected to have two lines:
+    /// 1. Base64-encoded master password
+    /// 2. Base64-encoded master salt
     ///
     /// On Unix systems, this also ensures the key file has strict `0600` permissions.
-    /// The returned key is wrapped in a `Zeroizing` container to ensure it is wiped
-    /// from memory when dropped.
-    pub fn load_master_key(&self) -> anyhow::Result<Zeroizing<Vec<u8>>> {
+    ///
+    /// Returns a `MasterKey` (tuple of `Zeroizing<Vec<u8>>`) to ensure sensitive
+    /// material is wiped from memory when dropped.
+    pub fn load_master_key(&self) -> anyhow::Result<MasterKey> {
         let key_path = self
             .master_key_path
             .as_ref()
@@ -102,19 +115,36 @@ impl SecurityUtil {
             }
         }
 
-        let key = fs::read_to_string(key_path)?;
-        Ok(Zeroizing::new(self.base64_decode(key.trim())?))
+        let content = fs::read_to_string(key_path)?;
+        let mut lines = content.lines();
+
+        let pass_b64 = lines
+            .next()
+            .ok_or_else(|| anyhow!("Master key file is empty"))?;
+        let salt_b64 = lines.next().ok_or_else(|| {
+            anyhow!(
+                "Master salt (line 2) not found in key file. Please regenerate your master key."
+            )
+        })?;
+
+        let password = self.base64_decode(pass_b64.trim())?;
+        let salt = self.base64_decode(salt_b64.trim())?;
+
+        Ok((Zeroizing::new(password), Zeroizing::new(salt)))
     }
 
-    /// Base64 encodes and writes a new master key to the user's home directory.
+    /// Base64 encodes and writes a new master key and salt to the user's home directory.
     ///
     /// On Unix systems, this ensures the file is created with secure `0600` permissions.
-    pub fn write_master_key(&self, key: &str) -> anyhow::Result<()> {
+    pub fn write_master_key(&self, key: &str, salt: &[u8]) -> anyhow::Result<()> {
         let key_path = self
             .master_key_path
             .as_ref()
             .ok_or_else(|| anyhow!("Unable to find home path. Set HOME environment variable or use a custom master key path."))?;
         let key_encoded = self.base64_encode(key.as_bytes())?;
+        let salt_encoded = self.base64_encode(salt)?;
+        let content = format!("{}\n{}\n", key_encoded, salt_encoded);
+
         if let Some(parent) = key_path.parent() {
             fs::create_dir_all(parent)?;
         }
@@ -130,14 +160,14 @@ impl SecurityUtil {
                 .truncate(true)
                 .mode(0o600)
                 .open(key_path)?;
-            file.write_all(key_encoded.as_bytes())?;
+            file.write_all(content.as_bytes())?;
             fs::set_permissions(key_path, fs::Permissions::from_mode(0o600))?;
             Ok(())
         }
 
         #[cfg(not(unix))]
         {
-            fs::write(key_path, &key_encoded)?;
+            fs::write(key_path, &content)?;
             Ok(())
         }
     }
@@ -146,10 +176,15 @@ impl SecurityUtil {
     pub fn encrypt_to_base64_string(
         &self,
         plain_text: &[u8],
-        master_key: &[u8],
+        master_password: &[u8],
+        master_salt: &[u8],
     ) -> anyhow::Result<String> {
-        let (cipher_text, nonce_bytes, salt) =
-            Self::encrypt_text_aes_gcm(plain_text, master_key, Encryption::AES_256_GCM)?;
+        let (cipher_text, nonce_bytes, salt) = Self::encrypt_text_aes_gcm(
+            plain_text,
+            master_password,
+            master_salt,
+            Encryption::AES_256_GCM,
+        )?;
         let mut bytes = Vec::new();
         // salt + nonce (IV) + cipher text (includes GCM tag)
         bytes.extend_from_slice(&salt);
@@ -162,7 +197,8 @@ impl SecurityUtil {
     pub fn decrypt_from_base64_string(
         &self,
         cipher_text: &str,
-        master_key: &[u8],
+        master_password: &[u8],
+        master_salt: &[u8],
     ) -> anyhow::Result<Vec<u8>> {
         if cipher_text.len() > MAX_CIPHERTEXT_B64_LEN {
             return Err(anyhow!("Cipher text is too large"));
@@ -175,7 +211,8 @@ impl SecurityUtil {
         let nonce: &[u8] = &cipher_text_bytes[SALT_LEN..SALT_LEN + NONCE_LEN];
         Self::decrypt_text_aes_gcm(
             &cipher_text_bytes[(SALT_LEN + NONCE_LEN)..],
-            master_key,
+            master_password,
+            master_salt,
             nonce,
             salt,
             Encryption::AES_256_GCM,
@@ -246,12 +283,55 @@ impl SecurityUtil {
         Ok(msg)
     }
 
+    /// Derives an encryption key using the server's two-step KDF process.
+    ///
+    /// The length of the derived key is determined by the `key_len` parameter (16, 24, or 32 bytes).
+    /// Returns the derived key wrapped in `Zeroizing<Vec<u8>>` for security.
+    fn derive_key_two_step(
+        master_password: &[u8],
+        master_salt: &[u8],
+        file_salt: &[u8],
+        key_len: usize,
+    ) -> anyhow::Result<Zeroizing<Vec<u8>>> {
+        // Step 1: Password + Master Salt -> Derived Master Key (600,000 iterations)
+        // Note: Server uses EVP_MAX_KEY_LENGTH (64 bytes) for the intermediate key
+        let mut master_key = Zeroizing::new(vec![0u8; 64]);
+        pbkdf2::<Hmac<Sha256>>(
+            master_password,
+            master_salt,
+            MASTER_PBKDF2_ITERATIONS,
+            &mut master_key,
+        )
+        .map_err(|e| anyhow!("Step 1 PBKDF2 failed: {:?}", e))?;
+
+        // Step 2: Derived Master Key (64 bytes) + File Salt -> Final File Key (1 iteration)
+        // Note: Server derives EVP_MAX_KEY_LENGTH + EVP_MAX_IV_LENGTH (80 bytes) but takes first key_len
+        let mut final_key = Zeroizing::new(vec![0u8; key_len]);
+        pbkdf2::<Hmac<Sha256>>(
+            &master_key,
+            file_salt,
+            FILE_PBKDF2_ITERATIONS,
+            &mut final_key,
+        )
+        .map_err(|e| anyhow!("Step 2 PBKDF2 failed: {:?}", e))?;
+
+        println!("[DEBUG] Hex derived master key (first 32): {:02x?}", &master_key[..32]);
+        println!("[DEBUG] Hex final key: {:02x?}", &final_key[..]);
+
+        Ok(final_key)
+    }
+
     /// Derives an encryption key from the master key and salt using PBKDF2-HMAC-SHA256.
     ///
     /// The length of the derived key is determined by the `key_len` parameter (16, 24, or 32 bytes).
-    fn derive_key(master_key: &[u8], salt: &[u8], key_len: usize) -> anyhow::Result<Vec<u8>> {
-        let mut derived_key = vec![0u8; key_len];
-        pbkdf2::<Hmac<Sha256>>(master_key, salt, PBKDF2_ITERATIONS, &mut derived_key)
+    /// Returns the derived key wrapped in `Zeroizing<Vec<u8>>` for security.
+    pub fn derive_key(
+        master_key: &[u8],
+        salt: &[u8],
+        key_len: usize,
+    ) -> anyhow::Result<Zeroizing<Vec<u8>>> {
+        let mut derived_key = Zeroizing::new(vec![0u8; key_len]);
+        pbkdf2::<Hmac<Sha256>>(master_key, salt, FILE_PBKDF2_ITERATIONS, &mut derived_key)
             .map_err(|e| anyhow!("PBKDF2 failed: {:?}", e))?;
         Ok(derived_key)
     }
@@ -263,11 +343,12 @@ impl SecurityUtil {
     /// is more efficient, and is resistant to certain attacks that affect CBC mode.
     ///
     /// Automatically generates a secure random nonce and salt, derives the encryption key
-    /// using PBKDF2 with 600,000 iterations, and returns the ciphertext alongside the
-    /// generated nonce and salt. The bit-length is selected via `encryption_mode`.
+    /// using a two-step PBKDF2 (600,000 + 1 iterations), and returns the ciphertext
+    /// alongside the generated nonce and salt. The bit-length is selected via `encryption_mode`.
     pub fn encrypt_text_aes_gcm(
         plaintext: &[u8],
-        master_key: &[u8],
+        master_password: &[u8],
+        master_salt: &[u8],
         encryption_mode: u8,
     ) -> anyhow::Result<(Vec<u8>, [u8; NONCE_LEN], [u8; SALT_LEN])> {
         let key_len = match encryption_mode {
@@ -286,7 +367,9 @@ impl SecurityUtil {
         let mut nonce_bytes = [0u8; NONCE_LEN];
         rand::rngs::OsRng.try_fill_bytes(&mut salt)?;
         rand::rngs::OsRng.try_fill_bytes(&mut nonce_bytes)?;
-        let mut derived_key_bytes = Self::derive_key(master_key, &salt, key_len)?;
+
+        let derived_key_bytes =
+            Self::derive_key_two_step(master_password, master_salt, &salt, key_len)?;
         let nonce = Nonce::from_slice(&nonce_bytes);
 
         let ciphertext = match encryption_mode {
@@ -304,31 +387,34 @@ impl SecurityUtil {
                     .encrypt(nonce, plaintext)
                     .map_err(|e| anyhow!("AES encryption failed {:?}", e))
             }
-            _ => {
+            Encryption::AES_256_GCM => {
                 let cipher = Aes256Gcm::new_from_slice(&derived_key_bytes)
                     .map_err(|e| anyhow!("Key initialization failed: {:?}", e))?;
                 cipher
                     .encrypt(nonce, plaintext)
                     .map_err(|e| anyhow!("AES encryption failed {:?}", e))
             }
-        };
+            _ => Err(anyhow!(
+                "Unsupported or invalid encryption mode: {}",
+                encryption_mode
+            )),
+        }?;
 
-        derived_key_bytes.zeroize();
-
-        Ok((ciphertext?, nonce_bytes, salt))
+        Ok((ciphertext, nonce_bytes, salt))
     }
 
-    /// Decrypts AES-GCM ciphertext (128, 192, or 256-bit) using the provided master key,
-    /// nonce, and salt.
+    /// Decrypts AES-GCM ciphertext using the provided master password, master salt,
+    /// nonce, and file salt.
     ///
     /// This function decrypts data that was encrypted with `encrypt_text_aes_gcm`.
     /// AES-GCM provides authenticated encryption, ensuring both confidentiality
     /// and integrity of the data. The bit-length is selected via `encryption_mode`.
     pub fn decrypt_text_aes_gcm(
         ciphertext: &[u8],
-        master_key: &[u8],
+        master_password: &[u8],
+        master_salt: &[u8],
         nonce_bytes: &[u8],
-        salt: &[u8],
+        file_salt: &[u8],
         encryption_mode: u8,
     ) -> anyhow::Result<Vec<u8>> {
         let key_len = match encryption_mode {
@@ -342,7 +428,8 @@ impl SecurityUtil {
                 ));
             }
         };
-        let mut derived_key_bytes = Self::derive_key(master_key, salt, key_len)?;
+        let derived_key_bytes =
+            Self::derive_key_two_step(master_password, master_salt, file_salt, key_len)?;
         let nonce = Nonce::from_slice(nonce_bytes);
 
         let plaintext = match encryption_mode {
@@ -360,17 +447,20 @@ impl SecurityUtil {
                     .decrypt(nonce, ciphertext)
                     .map_err(|e| anyhow!("AES decryption failed {:?}", e))
             }
-            _ => {
+            Encryption::AES_256_GCM => {
                 let cipher = Aes256Gcm::new_from_slice(&derived_key_bytes)
                     .map_err(|e| anyhow!("Key initialization failed: {:?}", e))?;
                 cipher
                     .decrypt(nonce, ciphertext)
                     .map_err(|e| anyhow!("AES decryption failed {:?}", e))
             }
-        };
-        derived_key_bytes.zeroize();
+            _ => Err(anyhow!(
+                "Unsupported or invalid encryption mode: {}",
+                encryption_mode
+            )),
+        }?;
 
-        plaintext
+        Ok(plaintext)
     }
 
     /// Connect to pgmoneta server using SCRAM-SHA-256 authentication.
@@ -391,12 +481,33 @@ impl SecurityUtil {
     ) -> anyhow::Result<TcpStream> {
         let scram = ScramClient::new(username, password, None);
         let address = format!("{}:{}", host, port);
-        let mut stream = TcpStream::connect(address).await?;
+        println!("[DEBUG] Beginning SASL handshake with {}:{}", host, port);
+        let mut stream = match timeout(Duration::from_secs(5), TcpStream::connect(address)).await {
+            Ok(Ok(s)) => s,
+            Ok(Err(e)) => return Err(anyhow!("Failed to connect to {host}:{port}: {e}")),
+            Err(_) => return Err(anyhow!("Connection to {host}:{port} timed out after 5s")),
+        };
+        println!("[DEBUG] Connected to {host}:{port}");
 
         let startup_msg = Self::create_startup_message(username).await?;
-        stream.write_all(startup_msg.as_slice()).await?;
+        match timeout(
+            Duration::from_secs(2),
+            stream.write_all(startup_msg.as_slice()),
+        )
+        .await
+        {
+            Ok(Ok(_)) => (),
+            Ok(Err(e)) => return Err(anyhow!("Failed to send startup message: {e}")),
+            Err(_) => return Err(anyhow!("Sending startup message timed out")),
+        }
+        println!("[DEBUG] Sent startup message");
 
-        let startup_resp = Self::read_message(&mut stream).await?;
+        let startup_resp =
+            match timeout(Duration::from_secs(5), Self::read_message(&mut stream)).await {
+                Ok(res) => res?,
+                Err(_) => return Err(anyhow!("Waiting for startup response timed out")),
+            };
+        println!("[DEBUG] Received startup response");
         let n = startup_resp.len();
         if n < Self::HEADER_OFFSET || startup_resp[0] != b'R' {
             return Err(anyhow!(
@@ -425,17 +536,33 @@ impl SecurityUtil {
 
         let (scram, client_first) = scram.client_first();
         let mut client_first_msg = Vec::new();
-        let size = 1 + 4 + 13 + 4 + 1 + client_first.len();
+        let mechanism = "SCRAM-SHA-256\0";
+        let size = 4 + mechanism.len() + 4 + client_first.len();
         client_first_msg.write_u8(b'p').await?;
         client_first_msg.write_i32(size as i32).await?;
+        client_first_msg.write_all(mechanism.as_bytes()).await?;
         client_first_msg
-            .write_all("SCRAM-SHA-256".as_bytes())
+            .write_i32(client_first.len() as i32)
             .await?;
-        client_first_msg.write_all("\0\0\0\0 ".as_bytes()).await?;
         client_first_msg.write_all(client_first.as_bytes()).await?;
-        stream.write_all(client_first_msg.as_slice()).await?;
+        match timeout(
+            Duration::from_secs(2),
+            stream.write_all(client_first_msg.as_slice()),
+        )
+        .await
+        {
+            Ok(Ok(_)) => (),
+            Ok(Err(e)) => return Err(anyhow!("Failed to send client-first: {e}")),
+            Err(_) => return Err(anyhow!("Sending client-first timed out")),
+        }
+        println!("[DEBUG] Sent client-first");
 
-        let server_first = Self::read_message(&mut stream).await?;
+        let server_first =
+            match timeout(Duration::from_secs(5), Self::read_message(&mut stream)).await {
+                Ok(res) => res?,
+                Err(_) => return Err(anyhow!("Waiting for server-first timed out")),
+            };
+        println!("[DEBUG] Received server-first");
         let n = server_first.len();
         if n <= Self::HEADER_OFFSET || server_first[0] != b'R' {
             return Err(anyhow!(
@@ -460,9 +587,24 @@ impl SecurityUtil {
         client_final_msg.write_u8(b'p').await?;
         client_final_msg.write_i32(size as i32).await?;
         client_final_msg.write_all(client_final.as_bytes()).await?;
-        stream.write_all(client_final_msg.as_slice()).await?;
+        match timeout(
+            Duration::from_secs(2),
+            stream.write_all(client_final_msg.as_slice()),
+        )
+        .await
+        {
+            Ok(Ok(_)) => (),
+            Ok(Err(e)) => return Err(anyhow!("Failed to send client-final: {e}")),
+            Err(_) => return Err(anyhow!("Sending client-final timed out")),
+        }
+        println!("[DEBUG] Sent client-final");
 
-        let server_final = Self::read_message(&mut stream).await?;
+        let server_final =
+            match timeout(Duration::from_secs(5), Self::read_message(&mut stream)).await {
+                Ok(res) => res?,
+                Err(_) => return Err(anyhow!("Waiting for server-final timed out")),
+            };
+        println!("[DEBUG] Received server-final");
         let n = server_final.len();
         if n <= Self::HEADER_OFFSET || server_final[0] != b'R' {
             return Err(anyhow!(
@@ -481,7 +623,12 @@ impl SecurityUtil {
         let server_final_str = String::from_utf8(Vec::from(&server_final[Self::HEADER_OFFSET..n]))?;
         scram.handle_server_final(&server_final_str)?;
 
-        let auth_success = Self::read_message(&mut stream).await?;
+        let auth_success =
+            match timeout(Duration::from_secs(5), Self::read_message(&mut stream)).await {
+                Ok(res) => res?,
+                Err(_) => return Err(anyhow!("Waiting for Auth success response timed out")),
+            };
+        println!("[DEBUG] Auth result received");
         let n = auth_success.len();
         if n == 0 || auth_success[0] == b'E' {
             return Err(anyhow!("Authentication failed"));
@@ -555,9 +702,9 @@ impl SecurityUtil {
         plaintext: &[u8],
         encryption_mode: u8,
     ) -> anyhow::Result<Vec<u8>> {
-        let master_key = self.load_master_key()?;
+        let (master_password, master_salt) = self.load_master_key()?;
         let (cipher_text, nonce_bytes, salt) =
-            Self::encrypt_text_aes_gcm(plaintext, &master_key, encryption_mode)?;
+            Self::encrypt_text_aes_gcm(plaintext, &master_password, &master_salt, encryption_mode)?;
         let mut bytes = Vec::new();
         bytes.extend_from_slice(&salt);
         bytes.extend_from_slice(&nonce_bytes);
@@ -577,12 +724,13 @@ impl SecurityUtil {
         if ciphertext.len() < SALT_LEN + NONCE_LEN {
             return Err(anyhow!("Not enough bytes to decrypt the text"));
         }
-        let master_key = self.load_master_key()?;
+        let (master_password, master_salt) = self.load_master_key()?;
         let salt = &ciphertext[..SALT_LEN];
         let nonce = &ciphertext[SALT_LEN..SALT_LEN + NONCE_LEN];
         Self::decrypt_text_aes_gcm(
             &ciphertext[(SALT_LEN + NONCE_LEN)..],
-            &master_key,
+            &master_password,
+            &master_salt,
             nonce,
             salt,
             encryption_mode,
@@ -607,13 +755,14 @@ mod tests {
     #[test]
     fn test_encrypt_decrypt() {
         let sutil = SecurityUtil::new();
-        let master_key = "test_master_key_!@#$~<>?/".as_bytes();
+        let master_password = "test_master_password_!@#$~<>?/".as_bytes();
+        let master_salt = "test_master_salt_!@#$~<>?/".as_bytes();
         let text = "test_text_123_!@#$~<>?/";
         let res = sutil
-            .encrypt_to_base64_string(text.as_bytes(), master_key)
+            .encrypt_to_base64_string(text.as_bytes(), master_password, master_salt)
             .expect("Encryption should succeed");
         let decrypted_text = sutil
-            .decrypt_from_base64_string(&res, master_key)
+            .decrypt_from_base64_string(&res, master_password, master_salt)
             .expect("Decryption should succeed");
         assert_eq!(decrypted_text, text.as_bytes())
     }
@@ -653,13 +802,14 @@ mod tests {
     #[test]
     fn test_encrypt_decrypt_empty_string() {
         let sutil = SecurityUtil::new();
-        let master_key = "test_master_key".as_bytes();
+        let master_password = "test_master_password".as_bytes();
+        let master_salt = "test_master_salt".as_bytes();
         let text = "";
         let res = sutil
-            .encrypt_to_base64_string(text.as_bytes(), master_key)
+            .encrypt_to_base64_string(text.as_bytes(), master_password, master_salt)
             .expect("Encryption should succeed");
         let decrypted_text = sutil
-            .decrypt_from_base64_string(&res, master_key)
+            .decrypt_from_base64_string(&res, master_password, master_salt)
             .expect("Decryption should succeed");
         assert_eq!(decrypted_text, text.as_bytes());
     }
@@ -667,13 +817,14 @@ mod tests {
     #[test]
     fn test_encrypt_decrypt_large_text() {
         let sutil = SecurityUtil::new();
-        let master_key = "test_master_key".as_bytes();
+        let master_password = "test_master_password".as_bytes();
+        let master_salt = "test_master_salt".as_bytes();
         let text = "a".repeat(10000);
         let res = sutil
-            .encrypt_to_base64_string(text.as_bytes(), master_key)
+            .encrypt_to_base64_string(text.as_bytes(), master_password, master_salt)
             .expect("Encryption should succeed");
         let decrypted_text = sutil
-            .decrypt_from_base64_string(&res, master_key)
+            .decrypt_from_base64_string(&res, master_password, master_salt)
             .expect("Decryption should succeed");
         assert_eq!(decrypted_text, text.as_bytes());
     }
@@ -681,13 +832,14 @@ mod tests {
     #[test]
     fn test_encrypt_decrypt_unicode() {
         let sutil = SecurityUtil::new();
-        let master_key = "test_master_key".as_bytes();
+        let master_password = "test_master_password".as_bytes();
+        let master_salt = "test_master_salt".as_bytes();
         let text = "Hello 世界 🌍 Привет";
         let res = sutil
-            .encrypt_to_base64_string(text.as_bytes(), master_key)
+            .encrypt_to_base64_string(text.as_bytes(), master_password, master_salt)
             .expect("Encryption should succeed");
         let decrypted_text = sutil
-            .decrypt_from_base64_string(&res, master_key)
+            .decrypt_from_base64_string(&res, master_password, master_salt)
             .expect("Decryption should succeed");
         assert_eq!(decrypted_text, text.as_bytes());
     }
@@ -695,15 +847,17 @@ mod tests {
     #[test]
     fn test_decrypt_with_wrong_key() {
         let sutil = SecurityUtil::new();
-        let master_key1 = "correct_key".as_bytes();
-        let master_key2 = "wrong_key".as_bytes();
+        let master_password1 = "correct_password".as_bytes();
+        let master_salt1 = "correct_salt".as_bytes();
+        let master_password2 = "wrong_password".as_bytes();
+        let master_salt2 = "wrong_salt".as_bytes();
         let text = "secret_data";
         let encrypted = sutil
-            .encrypt_to_base64_string(text.as_bytes(), master_key1)
+            .encrypt_to_base64_string(text.as_bytes(), master_password1, master_salt1)
             .expect("Encryption should succeed");
 
-        // Decryption with wrong key should fail
-        let result = sutil.decrypt_from_base64_string(&encrypted, master_key2);
+        // Decryption with wrong password/salt should fail (tag mismatch)
+        let result = sutil.decrypt_from_base64_string(&encrypted, master_password2, master_salt2);
         assert!(result.is_err());
     }
 
@@ -724,7 +878,7 @@ mod tests {
         let _cleanup = Cleanup(key_path);
 
         sutil
-            .write_master_key("ci_test_master_key")
+            .write_master_key("ci_test_master_key", b"ci_test_master_salt")
             .expect("Failed to write a temporary master key for testing");
 
         let plaintext: &[u8] = b"Hello, World! This is a test for AES-GCM encryption.";
@@ -746,10 +900,16 @@ mod tests {
             let cipher_at_rest = &bundle[SALT_LEN + NONCE_LEN..];
 
             // Manually verify decryption with raw decrypt function to ensure format is what we think it is
-            let master_key = sutil.load_master_key().unwrap();
-            let decrypted =
-                SecurityUtil::decrypt_text_aes_gcm(cipher_at_rest, &master_key, nonce, salt, mode)
-                    .expect("Decryption should succeed");
+            let (master_password, master_salt) = sutil.load_master_key().unwrap();
+            let decrypted = SecurityUtil::decrypt_text_aes_gcm(
+                cipher_at_rest,
+                &master_password,
+                &master_salt,
+                nonce,
+                salt,
+                mode,
+            )
+            .expect("Decryption should succeed");
             assert_eq!(decrypted, plaintext.to_vec());
 
             // verify round-trip via bundle API
@@ -763,15 +923,21 @@ mod tests {
     #[test]
     fn test_encrypt_decrypt_aes_gcm_empty_data() {
         let plaintext: &[u8] = b"";
-        let master_key = b"gcm_test_master_key_material!";
+        let master_password = b"gcm_test_master_password";
+        let master_salt = b"gcm_test_salt_!!";
 
-        let (cipher_text, nonce_bytes, salt) =
-            SecurityUtil::encrypt_text_aes_gcm(plaintext, master_key, Encryption::AES_256_GCM)
-                .expect("AES-GCM encryption should succeed");
+        let (cipher_text, nonce_bytes, salt) = SecurityUtil::encrypt_text_aes_gcm(
+            plaintext,
+            master_password,
+            master_salt,
+            Encryption::AES_256_GCM,
+        )
+        .expect("AES-GCM encryption should succeed");
 
         let decrypted = SecurityUtil::decrypt_text_aes_gcm(
             &cipher_text,
-            master_key,
+            master_password,
+            master_salt,
             &nonce_bytes,
             &salt,
             Encryption::AES_256_GCM,
@@ -784,15 +950,21 @@ mod tests {
     #[test]
     fn test_encrypt_decrypt_aes_gcm_large_data() {
         let plaintext: Vec<u8> = vec![b'A'; 10000];
-        let master_key = b"gcm_test_master_key_material!";
+        let master_password = b"gcm_test_master_password";
+        let master_salt = b"gcm_test_salt_!!";
 
-        let (cipher_text, nonce_bytes, salt) =
-            SecurityUtil::encrypt_text_aes_gcm(&plaintext, master_key, Encryption::AES_256_GCM)
-                .expect("AES-GCM encryption should succeed");
+        let (cipher_text, nonce_bytes, salt) = SecurityUtil::encrypt_text_aes_gcm(
+            &plaintext,
+            master_password,
+            master_salt,
+            Encryption::AES_256_GCM,
+        )
+        .expect("AES-GCM encryption should succeed");
 
         let decrypted = SecurityUtil::decrypt_text_aes_gcm(
             &cipher_text,
-            master_key,
+            master_password,
+            master_salt,
             &nonce_bytes,
             &salt,
             Encryption::AES_256_GCM,
