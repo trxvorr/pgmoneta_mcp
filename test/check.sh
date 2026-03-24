@@ -364,6 +364,8 @@ ci_install_utilities() {
     install_first_available_pkg lz4-devel liblz4-devel
     install_first_available_pkg cjson libcjson
     install_first_available_pkg cjson-devel libcjson-devel
+    install_first_available_pkg libyaml yaml
+    install_first_available_pkg libyaml-devel yaml-devel
     dnf install -y libssh-devel bzip2-devel
     dnf install -y libarchive libarchive-devel python3-docutils libatomic
     dnf install -y postgresql18 postgresql18-server postgresql18-contrib postgresql18-libs
