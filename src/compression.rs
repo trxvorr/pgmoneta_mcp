@@ -90,8 +90,6 @@ impl CompressionUtil {
     }
 
     fn compress_zstd(data: &[u8]) -> anyhow::Result<Vec<u8>> {
-        // Use one-shot compression so the produced frame carries a known content size.
-        // pgmoneta's `pgmoneta_zstdd_string()` rejects frames with unknown decompressed size.
         Ok(zstd::bulk::compress(data, 3)?)
     }
 
@@ -111,8 +109,6 @@ impl CompressionUtil {
             return Err(anyhow!("LZ4 input too large"));
         }
 
-        // pgmoneta's `pgmoneta_lz4c_string()` wire format is:
-        //   [4-byte big-endian original_size][raw LZ4 block payload]
         let compressed = block::compress(data, None, false)?;
         let mut result = Vec::with_capacity(4 + compressed.len());
         result.extend_from_slice(&(data.len() as u32).to_be_bytes());
@@ -132,8 +128,6 @@ impl CompressionUtil {
             return Err(anyhow!("LZ4 decompressed size too large"));
         }
 
-        // Matches pgmoneta's `pgmoneta_lz4d_string()` format:
-        // first 4 bytes are expected decompressed size in network order.
         let payload = &data[4..];
         let decompressed = block::decompress(payload, Some(expected_size as i32))?;
 
