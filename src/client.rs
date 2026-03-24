@@ -405,18 +405,60 @@ impl PgmonetaClient {
     where
         R: Serialize + Clone + Debug,
     {
-        let mut stream = Self::connect_to_server(username).await?;
-        tracing::info!(username = username, "Connected to server");
-
         let header = Self::build_request_header(command)?;
         let compression = header.compression;
         let encryption = header.encryption;
-        let request = PgmonetaRequest { request, header };
+        let secure_request = PgmonetaRequest {
+            request: request.clone(),
+            header,
+        };
 
-        let request_str = serde_json::to_string(&request)?;
+        let mut stream = Self::connect_to_server(username).await?;
+        tracing::info!(username = username, "Connected to server");
+
+        let request_str = serde_json::to_string(&secure_request)?;
         Self::write_request(&request_str, &mut stream, compression, encryption).await?;
-        tracing::debug!(username = username, request = ?request, "Sent request to server");
-        Self::read_response(&mut stream).await
+        tracing::debug!(username = username, request = ?secure_request, "Sent request to server");
+
+        match Self::read_response(&mut stream).await {
+            Ok(response) => Ok(response),
+            Err(primary_error) if compression != Compression::NONE || encryption != Encryption::NONE => {
+                tracing::warn!(
+                    username = username,
+                    command = command,
+                    compression = compression,
+                    encryption = encryption,
+                    error = %primary_error,
+                    "Secure management request failed; retrying once with plain framing"
+                );
+
+                let mut plain_header = Self::build_request_header(command)?;
+                plain_header.compression = Compression::NONE;
+                plain_header.encryption = Encryption::NONE;
+
+                let plain_request = PgmonetaRequest {
+                    request,
+                    header: plain_header,
+                };
+
+                let mut plain_stream = Self::connect_to_server(username).await?;
+                let plain_request_str = serde_json::to_string(&plain_request)?;
+                Self::write_request(
+                    &plain_request_str,
+                    &mut plain_stream,
+                    Compression::NONE,
+                    Encryption::NONE,
+                )
+                .await?;
+                tracing::debug!(
+                    username = username,
+                    request = ?plain_request,
+                    "Retried request with plain framing"
+                );
+                Self::read_response(&mut plain_stream).await
+            }
+            Err(e) => Err(e),
+        }
     }
 }
 
