@@ -100,7 +100,7 @@ cargo test --test list_backup_test -- --ignored
 
 ### Running Tests
 
-#### Quick Rust Test Run (no matrix loop)
+#### Quick Test Run (Unit Tests Only)
 
 ```bash
 cargo test
