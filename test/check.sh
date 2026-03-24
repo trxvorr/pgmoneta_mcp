@@ -581,7 +581,7 @@ case "$SUBCOMMAND" in
     ci)
         trap ci_shutdown EXIT
         ci_setup
-        cargo test -- --test-threads=1 --nocapture --include-ignored
+        PGMONETA_MCP_FORCE_PLAIN=1 cargo test -- --test-threads=1 --nocapture --include-ignored
         ;;
     "")
         cleanup

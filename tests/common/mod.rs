@@ -9,6 +9,10 @@ static INIT_CONFIG: Once = Once::new();
 
 pub fn init_config() {
     INIT_CONFIG.call_once(|| {
+        let force_plain = std::env::var("PGMONETA_MCP_FORCE_PLAIN")
+            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+            .unwrap_or(false);
+
         let security: SecurityUtil = SecurityUtil::new();
         let (master_password, master_salt) =
             security.load_master_key().expect("master key must exist");
@@ -32,8 +36,16 @@ pub fn init_config() {
             pgmoneta: PgmonetaConfiguration {
                 host: "127.0.0.1".to_string(),
                 port: 5002,
-                compression: "zstd".to_string(),
-                encryption: "aes_256_gcm".to_string(),
+                compression: if force_plain {
+                    "none".to_string()
+                } else {
+                    "zstd".to_string()
+                },
+                encryption: if force_plain {
+                    "none".to_string()
+                } else {
+                    "aes_256_gcm".to_string()
+                },
             },
             admins,
             llm: None,

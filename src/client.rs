@@ -23,6 +23,7 @@ use anyhow::anyhow;
 use chrono::Local;
 use serde::Serialize;
 use std::fmt::Debug;
+use std::io::ErrorKind;
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
@@ -93,6 +94,55 @@ where
 /// authenticating, opening a TCP stream, writing the payload, and reading the response.
 pub struct PgmonetaClient;
 impl PgmonetaClient {
+    const MAX_FRAME_LEN: usize = 64 * 1024 * 1024;
+
+    fn is_known_compression(value: u8) -> bool {
+        matches!(
+            value,
+            Compression::NONE
+                | Compression::GZIP
+                | Compression::ZSTD
+                | Compression::LZ4
+                | Compression::BZIP2
+                | Compression::SERVER_GZIP
+                | Compression::SERVER_ZSTD
+                | Compression::SERVER_LZ4
+        )
+    }
+
+    fn is_known_encryption(value: u8) -> bool {
+        matches!(
+            value,
+            Encryption::NONE
+                | Encryption::AES_256_GCM
+                | Encryption::AES_192_GCM
+                | Encryption::AES_128_GCM
+        )
+    }
+
+    async fn read_legacy_response_with_prefix<R>(
+        stream: &mut R,
+        first_byte: u8,
+    ) -> anyhow::Result<String>
+    where
+        R: tokio::io::AsyncRead + Unpin,
+    {
+        let mut buf = vec![first_byte];
+
+        loop {
+            match timeout(Duration::from_secs(2), stream.read_u8()).await {
+                Ok(Ok(0)) => break,
+                Ok(Ok(byte)) => buf.push(byte),
+                Ok(Err(e)) if e.kind() == ErrorKind::UnexpectedEof => break,
+                Ok(Err(e)) => return Err(anyhow!("Failed while reading legacy response: {e}")),
+                Err(_) => break,
+            }
+        }
+
+        let response = String::from_utf8(buf).map_err(|e| anyhow!("Invalid UTF-8: {e}"))?;
+        Ok(response)
+    }
+
     /// Constructs a standard request header for a given command.
     ///
     /// The header includes the current local timestamp and defaults to
@@ -190,8 +240,6 @@ impl PgmonetaClient {
             request_str
         );
 
-
-
         // pgmoneta management protocol:
         // 1 byte compression + 1 byte encryption + 4 bytes length + payload
 
@@ -208,7 +256,6 @@ impl PgmonetaClient {
         stream.write_all(payload.as_bytes()).await?;
         stream.flush().await?;
 
-
         tracing::debug!(
             compression = compression,
             encryption = encryption,
@@ -222,7 +269,6 @@ impl PgmonetaClient {
     where
         R: tokio::io::AsyncRead + Unpin,
     {
-
         // Read compression
         let compression = match timeout(Duration::from_secs(10), stream.read_u8()).await {
             Ok(Ok(c)) => c,
@@ -233,6 +279,14 @@ impl PgmonetaClient {
                 return Err(anyhow!("Reading compression byte timed out"));
             }
         };
+
+        if !Self::is_known_compression(compression) {
+            tracing::warn!(
+                first_byte = compression,
+                "Response did not start with a known compression code; falling back to legacy/null-terminated parser"
+            );
+            return Self::read_legacy_response_with_prefix(stream, compression).await;
+        }
 
         // Read encryption
         let encryption = match timeout(Duration::from_secs(2), stream.read_u8()).await {
@@ -245,6 +299,13 @@ impl PgmonetaClient {
             }
         };
 
+        if !Self::is_known_encryption(encryption) {
+            return Err(anyhow!(
+                "Unsupported encryption code from server: {}",
+                encryption
+            ));
+        }
+
         // Read length
         let len = match timeout(Duration::from_secs(2), stream.read_u32()).await {
             Ok(Ok(l)) => l as usize,
@@ -255,12 +316,18 @@ impl PgmonetaClient {
                 return Err(anyhow!("Reading message length timed out"));
             }
         };
+
+        if len > Self::MAX_FRAME_LEN {
+            return Err(anyhow!(
+                "Refusing oversized response frame: {} bytes",
+                len
+            ));
+        }
+
         println!(
             "[DEBUG] Response frame header received: compression={}, encryption={}, len={}",
             compression, encryption, len
         );
-
-
 
         // Read payload
         let mut buf = vec![0u8; len];
@@ -287,21 +354,40 @@ impl PgmonetaClient {
         let security_util = SecurityUtil::new();
 
         if compression != Compression::NONE || encryption != Encryption::NONE {
-            let data = security_util.base64_decode(std::str::from_utf8(&buf)?)?;
-            let mut decrypted = data.clone();
+            let secure_parse = || -> anyhow::Result<String> {
+                let data = security_util.base64_decode(std::str::from_utf8(&buf)?)?;
+                let mut decrypted = data.clone();
 
-            if encryption != Encryption::NONE {
-                decrypted = security_util.decrypt_text_aes_gcm_bundle(&data, encryption)?;
+                if encryption != Encryption::NONE {
+                    decrypted = security_util.decrypt_text_aes_gcm_bundle(&data, encryption)?;
+                }
+
+                let mut decompressed = decrypted;
+                if compression != Compression::NONE {
+                    decompressed = CompressionUtil::decompress(&decompressed, compression)?;
+                }
+
+                let response =
+                    String::from_utf8(decompressed).map_err(|e| anyhow!("Invalid UTF-8: {}", e))?;
+                Ok(response)
+            };
+
+            match secure_parse() {
+                Ok(response) => Ok(response),
+                Err(primary_error) => {
+                    if let Ok(plain) = String::from_utf8(buf.clone()) {
+                        if plain.trim_start().starts_with('{') {
+                            tracing::warn!(
+                                error = %primary_error,
+                                "Encrypted/compressed response parsing failed; accepting plain JSON fallback"
+                            );
+                            return Ok(plain);
+                        }
+                    }
+
+                    Err(primary_error)
+                }
             }
-
-            let mut decompressed = decrypted;
-            if compression != Compression::NONE {
-                decompressed = CompressionUtil::decompress(&decompressed, compression)?;
-            }
-
-            let response_str =
-                String::from_utf8(decompressed).map_err(|e| anyhow!("Invalid UTF-8: {}", e))?;
-            Ok(response_str)
         } else {
             let response_str =
                 String::from_utf8(buf).map_err(|e| anyhow!("Invalid UTF-8: {}", e))?;
