@@ -90,10 +90,9 @@ All Clippy warnings must be resolved before submitting a pull request.
 
 For day-to-day development, prefer `test/check.sh`.
 
-### Full local run (matrix + full suite)
+### Full local run
 
-Runs the 20-combination `info_test` matrix (5 compressions × 4 encryptions),
-then runs the regular `cargo test` suite.
+Runs the full local test flow.
 
 ```bash
 bash test/check.sh
@@ -141,12 +140,6 @@ You can still run Cargo directly:
 cargo test
 cargo test -- --nocapture
 cargo test <pattern>
-```
-
-### Legacy: run all tests directly with Cargo
-
-```bash
-cargo test
 ```
 
 ---

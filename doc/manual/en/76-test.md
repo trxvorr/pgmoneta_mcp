@@ -111,7 +111,7 @@ Ignored tests are not run unless you pass `-- --ignored`.
 
 #### Full Test Suite (with Container)
 
-To run the tests, simply run `<PATH_TO_PGMONETA_MCP>/test/check.sh`. The script will build a composed image containing PostgreSQL 18 and pgmoneta, start a docker/podman container using the image (so make sure you at least have one of them installed and have the corresponding container engine started), run a 20-combination compression/encryption `info_test` matrix, and then run the regular test suite. 
+To run the tests, simply run `<PATH_TO_PGMONETA_MCP>/test/check.sh`. The script will build a composed image containing PostgreSQL 18 and pgmoneta, start a docker/podman container using the image (so make sure you at least have one of them installed and have the corresponding container engine started), and run the regular test suite. 
 
 The containerized pgmoneta-postgres composed server will have a `backup_user` user with the replication attribute, a normal user `myuser` and a database `mydb`.
 
@@ -122,7 +122,7 @@ The script then runs pgmoneta_mcp tests in your local environment. The tests are
 Run `<PATH_TO_PGMONETA>/test/check.sh build` to prepare the test environment (image, master key generation) without running tests. This always does a full build.
 
 ### Fast Iteration of testing
-Run `<PATH_TO_PGMONETA_MCP>/test/check.sh test` to run the 20-combination `info_test` matrix and then the full test suite without rebuilding the composed image.
+Run `<PATH_TO_PGMONETA_MCP>/test/check.sh test` to run the full test suite without rebuilding the composed image.
 
 ### Unit tests
 To run unit tests only, simply run `<PATH_TO_PGMONETA_MCP>/test/check.sh unit` (or `<PATH_TO_PGMONETA_MCP>/test/check.sh unit-only`). This mode performs clean + build setup first, then runs unit tests.
