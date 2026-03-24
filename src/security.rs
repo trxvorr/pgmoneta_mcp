@@ -315,12 +315,6 @@ impl SecurityUtil {
         )
         .map_err(|e| anyhow!("Step 2 PBKDF2 failed: {:?}", e))?;
 
-        println!(
-            "[DEBUG] Hex derived master key (first 32): {:02x?}",
-            &master_key[..32]
-        );
-        println!("[DEBUG] Hex final key: {:02x?}", &final_key[..]);
-
         Ok(final_key)
     }
 
