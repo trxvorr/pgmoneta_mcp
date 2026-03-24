@@ -594,6 +594,16 @@ install_dependencies() {
     dnf install -y cargo # currently we just need cargo to run pgmoneta-mcp, others are installed in the ci or by docker/podman
 }
 
+run_info_test_matrix() {
+    echo "Running full compression/encryption info_test matrix..."
+    for comp in none gzip zstd lz4 bzip2; do
+        for enc in none aes_128_gcm aes_192_gcm aes_256_gcm; do
+            echo "Matrix mode: compression=$comp encryption=$enc"
+            PGMONETA_MCP_COMPRESSION="$comp" PGMONETA_MCP_ENCRYPTION="$enc" cargo test --test info_test -- --test-threads=1 --nocapture --include-ignored
+        done
+    done
+}
+
 ## ================================
 ## Main script logic
 ## ================================
@@ -603,16 +613,17 @@ usage() {
    echo " setup          Install Dependencies e.g (Rust, Cargo) required for building and running tests"
    echo " build          Set up environment (build, postgreSQL and pgmoneta composed image) without running tests"
    echo " clean          Clean up test suite environment and remove the composed image"
-   echo " test           Starts the composed container and run full test suite (clean + build + test)"
+    echo " test           Starts the composed container, runs 20-mode info_test matrix, then full test suite"
    echo " integration    Starts the composed container and run only integration tests (clean + build + integration)"
-   echo " unit           Starts the composed container and run only unit tests (clean + build + unit)"
-   echo " ci             Run full test suite with CI-specific settings"
+    echo " unit           Run only unit tests (no pgmoneta container required)"
+    echo " unit-only      Alias for 'unit'"
+    echo " ci             Run only the 20-mode info_test matrix with CI-specific settings"
    echo " status         Show test environment status (image, container, ports, master key)"
    echo "Options (run tests with optional filter; default is full suite):"
    echo " -m, --module NAME   Run all tests in module NAME"
    echo "Examples:"
-   echo "  $0                  Run full test suite"
-   echo "  $0 test             Run full test suite"
+    echo "  $0                  Run 20-mode info_test matrix + full test suite"
+    echo "  $0 test             Run 20-mode info_test matrix + full test suite"
    echo "  $0 build            Set up environment only; then run e.g. $0 test -m security"
    echo "  $0 test -m security       Run all tests in module 'security'"
    echo "  $0 integration -m info_test    Run integration tests in module 'info_test'"
@@ -655,6 +666,11 @@ case "$1" in
         shift
         ;;
     unit)
+        [[ -n "$SUBCOMMAND" ]] && usage
+        SUBCOMMAND="unit"
+        shift
+        ;;
+    unit-only)
         [[ -n "$SUBCOMMAND" ]] && usage
         SUBCOMMAND="unit"
         shift
@@ -711,6 +727,7 @@ case "$SUBCOMMAND" in
         build_test_suite
         start_composed_container
         trap stop_composed_container EXIT
+        run_info_test_matrix
         if [[ -n "$MODULE_FILTER" ]]; then
             cargo test --all-features -- --test-threads=1 --nocapture --include-ignored -- $MODULE_FILTER
         else
@@ -738,14 +755,7 @@ case "$SUBCOMMAND" in
     ci)
         trap ci_shutdown EXIT
         ci_setup
-        
-        echo "Running full compression/encryption info_test matrix..."
-        for comp in none gzip zstd lz4 bzip2; do
-            for enc in none aes_128_gcm aes_192_gcm aes_256_gcm; do
-                echo "Matrix mode: compression=$comp encryption=$enc"
-                PGMONETA_MCP_COMPRESSION="$comp" PGMONETA_MCP_ENCRYPTION="$enc" cargo test --test info_test -- --test-threads=1 --nocapture --include-ignored
-            done
-        done
+        run_info_test_matrix
 
         echo "Skipping default cargo test suite in ci mode; unit tests are handled in dedicated CI jobs."
         ;;
@@ -755,6 +765,7 @@ case "$SUBCOMMAND" in
         build_test_suite
         start_composed_container
         trap stop_composed_container EXIT
+        run_info_test_matrix
         if [[ -n "$MODULE_FILTER" ]]; then
             cargo test -- --test-threads=1 --nocapture --include-ignored -- $MODULE_FILTER
         else
