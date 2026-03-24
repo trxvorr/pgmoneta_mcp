@@ -13,6 +13,23 @@ pub fn init_config() {
             .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
             .unwrap_or(false);
 
+        let requested_compression = std::env::var("PGMONETA_MCP_COMPRESSION")
+            .unwrap_or_else(|_| "zstd".to_string());
+        let requested_encryption = std::env::var("PGMONETA_MCP_ENCRYPTION")
+            .unwrap_or_else(|_| "aes_256_gcm".to_string());
+
+        let compression = if force_plain {
+            "none".to_string()
+        } else {
+            requested_compression
+        };
+
+        let encryption = if force_plain {
+            "none".to_string()
+        } else {
+            requested_encryption
+        };
+
         let security: SecurityUtil = SecurityUtil::new();
         let (master_password, master_salt) =
             security.load_master_key().expect("master key must exist");
@@ -36,16 +53,8 @@ pub fn init_config() {
             pgmoneta: PgmonetaConfiguration {
                 host: "127.0.0.1".to_string(),
                 port: 5002,
-                compression: if force_plain {
-                    "none".to_string()
-                } else {
-                    "zstd".to_string()
-                },
-                encryption: if force_plain {
-                    "none".to_string()
-                } else {
-                    "aes_256_gcm".to_string()
-                },
+                compression,
+                encryption,
             },
             admins,
             llm: None,

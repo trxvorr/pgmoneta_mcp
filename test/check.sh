@@ -726,6 +726,9 @@ case "$SUBCOMMAND" in
     ci)
         trap ci_shutdown EXIT
         ci_setup
+        echo "Running integration probe in plain mode (none/none)..."
+        PGMONETA_MCP_FORCE_PLAIN=1 cargo test --test info_test -- --test-threads=1 --nocapture --include-ignored
+        echo "Running default test suite (configured secure mode)..."
         cargo test -- --test-threads=1 --nocapture --include-ignored
         ;;
     "")
