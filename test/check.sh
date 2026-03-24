@@ -300,14 +300,25 @@ ci_install_utilities() {
 
     rpm -Uvh "https://dl.fedoraproject.org/pub/epel/epel-release-latest-10.noarch.rpm"
     rpm -Uvh "https://download.postgresql.org/pub/repos/yum/reporpms/EL-10-${arch}/pgdg-redhat-repo-latest.noarch.rpm"
+
+    # EPEL notes that many packages (including devel headers) may require CRB.
+    if command -v crb >/dev/null 2>&1; then
+        crb enable || true
+    fi
+
     dnf update -y
     dnf install -y cargo nmap-ncat git gcc clang cmake make
-    if dnf info -q libev-devel >/dev/null 2>&1; then
-        dnf install -y libev libev-devel
-    else
-        echo "libev-devel not available on this distribution; installing libev only"
-        dnf install -y libev
+
+    # pgmoneta source build requires libev headers; install by pkg-config provide first.
+    if ! dnf install -y libev 'pkgconfig(libev)'; then
+        if dnf info -q libev-devel >/dev/null 2>&1; then
+            dnf install -y libev libev-devel
+        else
+            echo "Error: libev development headers are required but not available (pkgconfig(libev)/libev-devel)"
+            return 1
+        fi
     fi
+
     dnf install -y openssl openssl-devel systemd systemd-devel zlib zlib-devel
     dnf install -y zstd lz4 libssh bzip2
     install_first_available_pkg zstd-devel libzstd-devel
