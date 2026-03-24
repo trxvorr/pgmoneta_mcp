@@ -88,22 +88,63 @@ All Clippy warnings must be resolved before submitting a pull request.
 
 ## Testing
 
-### Run all tests
+For day-to-day development, prefer `test/check.sh`.
+
+### Full local run (matrix + full suite)
+
+Runs the 20-combination `info_test` matrix (5 compressions × 4 encryptions),
+then runs the regular `cargo test` suite.
+
+```bash
+bash test/check.sh
+# or
+bash test/check.sh test
+```
+
+### CI integration run (matrix only)
+
+Runs only the 20-combination `info_test` matrix.
+
+```bash
+bash test/check.sh ci
+```
+
+### Unit tests only (no container / no pgmoneta)
+
+```bash
+bash test/check.sh unit
+# alias
+bash test/check.sh unit-only
+```
+
+### Integration tests only
+
+```bash
+bash test/check.sh integration
+```
+
+### Filter tests by module/pattern
+
+```bash
+bash test/check.sh -m security
+bash test/check.sh unit -m compression
+bash test/check.sh integration -m info_test
+```
+
+### Direct Cargo commands
+
+You can still run Cargo directly:
 
 ```bash
 cargo test
-```
-
-### Run tests with output
-
-```bash
 cargo test -- --nocapture
+cargo test <pattern>
 ```
 
-### Run tests matching a pattern
+### Legacy: run all tests directly with Cargo
 
 ```bash
-cargo test <pattern>
+cargo test
 ```
 
 ---
