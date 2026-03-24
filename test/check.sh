@@ -738,20 +738,14 @@ case "$SUBCOMMAND" in
     ci)
         trap ci_shutdown EXIT
         ci_setup
-        echo "Running integration probe in plain mode (none/none)..."
-        PGMONETA_MCP_FORCE_PLAIN=1 cargo test --test info_test -- --test-threads=1 --nocapture --include-ignored
-        echo "Running integration probe in secure mode (zstd + aes_256_gcm)..."
-        PGMONETA_MCP_COMPRESSION=zstd PGMONETA_MCP_ENCRYPTION=aes_256_gcm cargo test --test info_test -- --test-threads=1 --nocapture --include-ignored
-
-        if [[ "${PGMONETA_MCP_TEST_ALL_MODES:-0}" == "1" ]]; then
-            echo "Running optional full compression/encryption info_test matrix..."
-            for comp in none gzip zstd lz4 bzip2; do
-                for enc in none aes_128_gcm aes_192_gcm aes_256_gcm; do
-                    echo "Matrix mode: compression=$comp encryption=$enc"
-                    PGMONETA_MCP_COMPRESSION="$comp" PGMONETA_MCP_ENCRYPTION="$enc" cargo test --test info_test -- --test-threads=1 --nocapture --include-ignored
-                done
+        
+        echo "Running full compression/encryption info_test matrix..."
+        for comp in none gzip zstd lz4 bzip2; do
+            for enc in none aes_128_gcm aes_192_gcm aes_256_gcm; do
+                echo "Matrix mode: compression=$comp encryption=$enc"
+                PGMONETA_MCP_COMPRESSION="$comp" PGMONETA_MCP_ENCRYPTION="$enc" cargo test --test info_test -- --test-threads=1 --nocapture --include-ignored
             done
-        fi
+        done
 
         echo "Running default test suite (configured secure mode)..."
         cargo test -- --test-threads=1 --nocapture --include-ignored
