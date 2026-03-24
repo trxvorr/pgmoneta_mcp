@@ -90,11 +90,9 @@ impl CompressionUtil {
     }
 
     fn compress_zstd(data: &[u8]) -> anyhow::Result<Vec<u8>> {
-        use zstd::stream::write::Encoder;
-
-        let mut encoder = Encoder::new(Vec::new(), 3)?;
-        encoder.write_all(data)?;
-        Ok(encoder.finish()?)
+        // Use one-shot compression so the produced frame carries a known content size.
+        // pgmoneta's `pgmoneta_zstdd_string()` rejects frames with unknown decompressed size.
+        Ok(zstd::bulk::compress(data, 3)?)
     }
 
     fn decompress_zstd(data: &[u8]) -> anyhow::Result<Vec<u8>> {
