@@ -106,12 +106,11 @@ cargo test --test list_backup_test -- --ignored
 cargo test
 ```
 
-This runs Rust tests once (unit tests, integration tests, and doctests according to Cargo defaults) and does not run the 20-combination compression/encryption matrix.
-Ignored tests are not run unless you pass `-- --ignored`.
+This runs all unit tests without requiring external dependencies.
 
 #### Full Test Suite (with Container)
 
-To run the tests, simply run `<PATH_TO_PGMONETA_MCP>/test/check.sh`. The script will build a composed image containing PostgreSQL 18 and pgmoneta, start a docker/podman container using the image (so make sure you at least have one of them installed and have the corresponding container engine started), and run the regular test suite. 
+To run the tests, simply run `<PATH_TO_PGMONETA_MCP>/test/check.sh`. The script will build a composed image containing PostgreSQL 18 and pgmoneta, start a docker/podman container using the image (so make sure you at least have one of them installed and have the corresponding container engine started) and run tests. 
 
 The containerized pgmoneta-postgres composed server will have a `backup_user` user with the replication attribute, a normal user `myuser` and a database `mydb`.
 
