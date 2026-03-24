@@ -284,7 +284,13 @@ ci_install_utilities() {
     rpm -Uvh "https://download.postgresql.org/pub/repos/yum/reporpms/EL-10-${arch}/pgdg-redhat-repo-latest.noarch.rpm"
     dnf update -y
     dnf install -y cargo nmap-ncat git gcc clang cmake make
-    dnf install -y libev libev-devel openssl openssl-devel systemd systemd-devel zlib zlib-devel
+    if dnf info -q libev-devel >/dev/null 2>&1; then
+        dnf install -y libev libev-devel
+    else
+        echo "libev-devel not available on this distribution; installing libev only"
+        dnf install -y libev
+    fi
+    dnf install -y openssl openssl-devel systemd systemd-devel zlib zlib-devel
     dnf install -y zstd zstd-devel lz4 lz4-devel libssh libssh-devel bzip2 bzip2-devel
     dnf install -y libarchive libarchive-devel cjson cjson-devel python3-docutils libatomic
     dnf install -y postgresql18 postgresql18-server postgresql18-contrib postgresql18-libs postgresql18-devel
