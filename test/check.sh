@@ -277,6 +277,45 @@ ci_wait_for_pgmoneta() {
     done
 }
 
+ci_install_libev_from_source() {
+    local workdir="/tmp/libev-src"
+    local tarball="$workdir/libev.tar.gz"
+    local extracted_dir=""
+
+    rm -rf "$workdir"
+    mkdir -p "$workdir"
+
+    # Prefer official release tarball; keep a mirror fallback.
+    if ! curl -fsSL -o "$tarball" "https://dist.schmorp.de/libev/libev-4.33.tar.gz"; then
+        curl -fsSL -o "$tarball" "https://github.com/enki/libev/archive/refs/tags/v4.33.tar.gz"
+    fi
+
+    tar -xzf "$tarball" -C "$workdir"
+    extracted_dir="$(find "$workdir" -mindepth 1 -maxdepth 1 -type d | head -n 1)"
+
+    if [ -z "$extracted_dir" ]; then
+        echo "Error: unable to extract libev source archive"
+        return 1
+    fi
+
+    pushd "$extracted_dir" >/dev/null
+
+    if [ -x ./configure ]; then
+        ./configure --prefix=/usr
+    else
+        if [ -x ./autogen.sh ]; then
+            ./autogen.sh
+        fi
+        ./configure --prefix=/usr
+    fi
+
+    make -j"$(nproc)"
+    make install
+    ldconfig || true
+
+    popd >/dev/null
+}
+
 ci_install_utilities() {
     local arch
     arch="$(uname -m)"
@@ -314,8 +353,8 @@ ci_install_utilities() {
         if dnf info -q libev-devel >/dev/null 2>&1; then
             dnf install -y libev libev-devel
         else
-            echo "Error: libev development headers are required but not available (pkgconfig(libev)/libev-devel)"
-            return 1
+            echo "libev development package not available; building libev from source"
+            ci_install_libev_from_source
         fi
     fi
 
