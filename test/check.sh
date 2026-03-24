@@ -459,12 +459,24 @@ ci_setup() {
     ci_create_users
     ci_handle_master_key
     cp "$CONF_FILES"/* /tmp/
+    # Increase server verbosity in CI to aid protocol-interoperability debugging
+    sed -i 's/^log_level = .*/log_level = debug/' /tmp/pgmoneta.conf || true
     ci_run_postgresql
     ci_run_pgmoneta
 }
 
+ci_dump_logs() {
+    echo "=== pgmoneta log (tail) ==="
+    if [ -f /tmp/pgmoneta.log ]; then
+        tail -n 300 /tmp/pgmoneta.log || true
+    else
+        echo "No /tmp/pgmoneta.log file found"
+    fi
+}
+
 ci_shutdown() {
     echo "Stopping CI services..."
+    ci_dump_logs
     [ -n "${PGMONETA_PID:-}" ] && kill -TERM "$PGMONETA_PID" >/dev/null 2>&1 || true
     [ -n "${POSTGRES_PID:-}" ] && kill -TERM "$POSTGRES_PID" >/dev/null 2>&1 || true
     sleep 1
@@ -728,6 +740,19 @@ case "$SUBCOMMAND" in
         ci_setup
         echo "Running integration probe in plain mode (none/none)..."
         PGMONETA_MCP_FORCE_PLAIN=1 cargo test --test info_test -- --test-threads=1 --nocapture --include-ignored
+        echo "Running integration probe in secure mode (zstd + aes_256_gcm)..."
+        PGMONETA_MCP_COMPRESSION=zstd PGMONETA_MCP_ENCRYPTION=aes_256_gcm cargo test --test info_test -- --test-threads=1 --nocapture --include-ignored
+
+        if [[ "${PGMONETA_MCP_TEST_ALL_MODES:-0}" == "1" ]]; then
+            echo "Running optional full compression/encryption info_test matrix..."
+            for comp in none gzip zstd lz4 bzip2; do
+                for enc in none aes_128_gcm aes_192_gcm aes_256_gcm; do
+                    echo "Matrix mode: compression=$comp encryption=$enc"
+                    PGMONETA_MCP_COMPRESSION="$comp" PGMONETA_MCP_ENCRYPTION="$enc" cargo test --test info_test -- --test-threads=1 --nocapture --include-ignored
+                done
+            done
+        fi
+
         echo "Running default test suite (configured secure mode)..."
         cargo test -- --test-threads=1 --nocapture --include-ignored
         ;;
