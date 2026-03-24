@@ -747,8 +747,7 @@ case "$SUBCOMMAND" in
             done
         done
 
-        echo "Running default test suite (configured secure mode)..."
-        cargo test -- --test-threads=1 --nocapture --include-ignored
+        echo "Skipping default cargo test suite in ci mode; unit tests are handled in dedicated CI jobs."
         ;;
     "")
         cleanup
