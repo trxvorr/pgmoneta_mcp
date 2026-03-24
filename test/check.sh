@@ -280,6 +280,24 @@ ci_wait_for_pgmoneta() {
 ci_install_utilities() {
     local arch
     arch="$(uname -m)"
+
+    install_first_available_pkg() {
+        local selected=""
+        for candidate in "$@"; do
+            if dnf info -q "$candidate" >/dev/null 2>&1; then
+                selected="$candidate"
+                break
+            fi
+        done
+
+        if [ -z "$selected" ]; then
+            echo "Error: none of the candidate packages are available: $*"
+            return 1
+        fi
+
+        dnf install -y "$selected"
+    }
+
     rpm -Uvh "https://dl.fedoraproject.org/pub/epel/epel-release-latest-10.noarch.rpm"
     rpm -Uvh "https://download.postgresql.org/pub/repos/yum/reporpms/EL-10-${arch}/pgdg-redhat-repo-latest.noarch.rpm"
     dnf update -y
@@ -291,8 +309,13 @@ ci_install_utilities() {
         dnf install -y libev
     fi
     dnf install -y openssl openssl-devel systemd systemd-devel zlib zlib-devel
-    dnf install -y zstd zstd-devel lz4 lz4-devel libssh libssh-devel bzip2 bzip2-devel
-    dnf install -y libarchive libarchive-devel cjson cjson-devel python3-docutils libatomic
+    dnf install -y zstd lz4 libssh bzip2
+    install_first_available_pkg zstd-devel libzstd-devel
+    install_first_available_pkg lz4-devel liblz4-devel
+    install_first_available_pkg cjson libcjson
+    install_first_available_pkg cjson-devel libcjson-devel
+    dnf install -y libssh-devel bzip2-devel
+    dnf install -y libarchive libarchive-devel python3-docutils libatomic
     dnf install -y postgresql18 postgresql18-server postgresql18-contrib postgresql18-libs postgresql18-devel
 }
 
