@@ -389,6 +389,7 @@ ci_install_utilities() {
     fi
 
     dnf install -y openssl openssl-devel systemd systemd-devel zlib zlib-devel
+    install_first_available_pkg ncurses-devel 'pkgconfig(ncurses)'
     dnf install -y zstd lz4 libssh bzip2
     install_first_available_pkg zstd-devel libzstd-devel
     install_first_available_pkg lz4-devel liblz4-devel
