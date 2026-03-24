@@ -316,25 +316,55 @@ ci_install_libev_from_source() {
     popd >/dev/null
 }
 
+ci_install_libyaml_from_source() {
+    local workdir="/tmp/libyaml-src"
+    local tarball="$workdir/libyaml.tar.gz"
+    local extracted_dir=""
+
+    rm -rf "$workdir"
+    mkdir -p "$workdir"
+
+    curl -fsSL -o "$tarball" "https://github.com/yaml/libyaml/archive/refs/tags/0.2.5.tar.gz"
+
+    tar -xzf "$tarball" -C "$workdir"
+    extracted_dir="$(find "$workdir" -mindepth 1 -maxdepth 1 -type d | head -n 1)"
+
+    if [ -z "$extracted_dir" ]; then
+        echo "Error: unable to extract libyaml source archive"
+        return 1
+    fi
+
+    pushd "$extracted_dir" >/dev/null
+
+    if [ ! -x ./configure ]; then
+        dnf install -y autoconf automake libtool
+        if [ -x ./bootstrap ]; then
+            ./bootstrap
+        else
+            autoreconf -fi
+        fi
+    fi
+
+    ./configure --prefix=/usr
+    make -j"$(nproc)"
+    make install
+    ldconfig || true
+    popd >/dev/null
+}
+
 ci_install_utilities() {
     local arch
     arch="$(uname -m)"
 
     install_first_available_pkg() {
-        local selected=""
         for candidate in "$@"; do
-            if dnf info -q "$candidate" >/dev/null 2>&1; then
-                selected="$candidate"
-                break
+            if dnf install -y "$candidate" >/dev/null 2>&1; then
+                return 0
             fi
         done
 
-        if [ -z "$selected" ]; then
-            echo "Error: none of the candidate packages are available: $*"
-            return 1
-        fi
-
-        dnf install -y "$selected"
+        echo "Error: none of the candidate packages are available: $*"
+        return 1
     }
 
     rpm -Uvh "https://dl.fedoraproject.org/pub/epel/epel-release-latest-10.noarch.rpm"
@@ -365,7 +395,10 @@ ci_install_utilities() {
     install_first_available_pkg cjson libcjson
     install_first_available_pkg cjson-devel libcjson-devel
     install_first_available_pkg libyaml yaml
-    install_first_available_pkg libyaml-devel yaml-devel
+    if ! install_first_available_pkg libyaml-devel yaml-devel 'pkgconfig(yaml-0.1)'; then
+        echo "libyaml development package not available; building libyaml from source"
+        ci_install_libyaml_from_source
+    fi
     dnf install -y libssh-devel bzip2-devel
     dnf install -y libarchive libarchive-devel python3-docutils libatomic
     dnf install -y postgresql18 postgresql18-server postgresql18-contrib postgresql18-libs
