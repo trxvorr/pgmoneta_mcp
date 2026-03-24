@@ -316,7 +316,7 @@ ci_install_utilities() {
     install_first_available_pkg cjson-devel libcjson-devel
     dnf install -y libssh-devel bzip2-devel
     dnf install -y libarchive libarchive-devel python3-docutils libatomic
-    dnf install -y postgresql18 postgresql18-server postgresql18-contrib postgresql18-libs postgresql18-devel
+    dnf install -y postgresql18 postgresql18-server postgresql18-contrib postgresql18-libs
 }
 
 ci_install_pgmoneta_from_main() {

@@ -318,10 +318,7 @@ impl PgmonetaClient {
         };
 
         if len > Self::MAX_FRAME_LEN {
-            return Err(anyhow!(
-                "Refusing oversized response frame: {} bytes",
-                len
-            ));
+            return Err(anyhow!("Refusing oversized response frame: {} bytes", len));
         }
 
         println!(
@@ -375,14 +372,14 @@ impl PgmonetaClient {
             match secure_parse() {
                 Ok(response) => Ok(response),
                 Err(primary_error) => {
-                    if let Ok(plain) = String::from_utf8(buf.clone()) {
-                        if plain.trim_start().starts_with('{') {
-                            tracing::warn!(
-                                error = %primary_error,
-                                "Encrypted/compressed response parsing failed; accepting plain JSON fallback"
-                            );
-                            return Ok(plain);
-                        }
+                    if let Ok(plain) = String::from_utf8(buf.clone())
+                        && plain.trim_start().starts_with('{')
+                    {
+                        tracing::warn!(
+                            error = %primary_error,
+                            "Encrypted/compressed response parsing failed; accepting plain JSON fallback"
+                        );
+                        return Ok(plain);
                     }
 
                     Err(primary_error)
