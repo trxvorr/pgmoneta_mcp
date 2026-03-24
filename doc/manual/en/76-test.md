@@ -73,34 +73,30 @@ cargo test -- --nocapture
 
 #### Integration Tests
 
-Integration tests are located in `tests/info_test.rs`, `tests/list_backup_test.rs`, and `tests/handler_test.rs`. They test the complete system with a running pgmoneta server.
+Integration tests are located in `tests/info_test.rs`, `tests/list_backup_test.rs`, and `tests/handler_test.rs`. Some require a running pgmoneta stack, while others validate handler behavior without external services.
 
 **Running integration tests**:
 ```bash
-# Run all integration tests (requires pgmoneta stack)
-cargo test -- --ignored
+# Run non-ignored integration tests
+cargo test --test handler_test
 
-# Run specific integration test
+# Run pgmoneta-dependent integration tests (ignored by default)
 cargo test --test info_test -- --ignored
+cargo test --test list_backup_test -- --ignored
 ```
 
-**Note**: Integration tests are marked with `#[ignore]` because they require:
-- Running pgmoneta server on localhost:2345
+**Note**: Some integration tests are marked with `#[ignore]` because they require:
+- Running pgmoneta server on localhost:5002
 - Configured admin user
 - Master key set up
 - At least one server configured in pgmoneta
 
 **Available integration tests**:
 
-- `test_handler_say_hello`: Test basic MCP handler response
-- `test_handler_get_backup_info_latest`: Get latest backup information
-- `test_handler_get_backup_info_oldest`: Get oldest backup information
-- `test_handler_list_backups`: List backups in ascending order
-- `test_handler_list_backups_descending`: List backups in descending order
-- `test_handler_initialization`: Handler initialization
-- `test_security_util_creation`: Security utility creation
-- `test_password_generation`: Password generation
-- `test_encryption_roundtrip`: Encryption roundtrip
+- `info_test` (`tests/info_test.rs`, ignored): Get backup information via running pgmoneta stack
+- `list_backup_test` (`tests/list_backup_test.rs`, ignored): List backups via running pgmoneta stack
+- `test_handler_initialization` (`tests/handler_test.rs`): Handler initialization
+- `test_handler_default_trait` (`tests/handler_test.rs`): `Default` trait behavior for handler
 
 ### Running Tests
 
@@ -111,6 +107,7 @@ cargo test
 ```
 
 This runs Rust tests once (unit tests, integration tests, and doctests according to Cargo defaults) and does not run the 20-combination compression/encryption matrix.
+Ignored tests are not run unless you pass `-- --ignored`.
 
 #### Full Test Suite (with Container)
 
