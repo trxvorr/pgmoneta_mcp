@@ -73,14 +73,14 @@ cargo test -- --nocapture
 
 #### Integration Tests
 
-Integration tests are located in `tests/info_test.rs`, `tests/list_backup_test.rs`, and `tests/handler_test.rs`. Some require a running pgmoneta stack, while others validate handler behavior without external services.
+Integration tests are located in `tests/info_test.rs`, `tests/list_backup_test.rs`, and `tests/handler_test.rs`.
 
 **Running integration tests**:
 ```bash
 # Run non-ignored integration tests
 cargo test --test handler_test
 
-# Run pgmoneta-dependent integration tests (ignored by default)
+# Run ignored integration tests that require pgmoneta stack
 cargo test --test info_test -- --ignored
 cargo test --test list_backup_test -- --ignored
 ```
