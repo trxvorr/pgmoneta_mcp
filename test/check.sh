@@ -283,9 +283,38 @@ ci_install_utilities() {
     rpm -Uvh "https://dl.fedoraproject.org/pub/epel/epel-release-latest-10.noarch.rpm"
     rpm -Uvh "https://download.postgresql.org/pub/repos/yum/reporpms/EL-10-${arch}/pgdg-redhat-repo-latest.noarch.rpm"
     dnf update -y
-    dnf install -y cargo nmap-ncat
-    dnf install -y postgresql18 postgresql18-server postgresql18-contrib postgresql18-libs
-    dnf install -y pgmoneta
+    dnf install -y cargo nmap-ncat git gcc clang cmake make
+    dnf install -y libev libev-devel openssl openssl-devel systemd systemd-devel zlib zlib-devel
+    dnf install -y zstd zstd-devel lz4 lz4-devel libssh libssh-devel bzip2 bzip2-devel
+    dnf install -y libarchive libarchive-devel cjson cjson-devel python3-docutils libatomic
+    dnf install -y postgresql18 postgresql18-server postgresql18-contrib postgresql18-libs postgresql18-devel
+}
+
+ci_install_pgmoneta_from_main() {
+    local repo_dir="/tmp/pgmoneta-main"
+
+    echo "Installing pgmoneta from main branch..."
+    rm -rf "$repo_dir"
+    git clone --depth 1 --branch main https://github.com/pgmoneta/pgmoneta.git "$repo_dir"
+
+    mkdir -p "$repo_dir/build"
+    pushd "$repo_dir/build" >/dev/null
+    cmake -DDOCS=false -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr ..
+    make -j"$(nproc)"
+    make install
+    popd >/dev/null
+
+    command -v pgmoneta >/dev/null 2>&1 || {
+        echo "Error: pgmoneta binary not found after build/install"
+        exit 1
+    }
+    command -v pgmoneta-admin >/dev/null 2>&1 || {
+        echo "Error: pgmoneta-admin binary not found after build/install"
+        exit 1
+    }
+
+    echo "Using pgmoneta version:"
+    pgmoneta --version || true
 }
 
 ci_handle_master_key() {
@@ -311,6 +340,7 @@ EOF
 ci_setup() {
     mkdir -p /pgdata /pgwal /pgmoneta /pglog
     ci_install_utilities
+    ci_install_pgmoneta_from_main
     ci_create_users
     ci_handle_master_key
     cp "$CONF_FILES"/* /tmp/
@@ -581,7 +611,7 @@ case "$SUBCOMMAND" in
     ci)
         trap ci_shutdown EXIT
         ci_setup
-        PGMONETA_MCP_FORCE_PLAIN=1 cargo test -- --test-threads=1 --nocapture --include-ignored
+        cargo test -- --test-threads=1 --nocapture --include-ignored
         ;;
     "")
         cleanup
