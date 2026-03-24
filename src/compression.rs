@@ -105,21 +105,43 @@ impl CompressionUtil {
     }
 
     fn compress_lz4(data: &[u8]) -> anyhow::Result<Vec<u8>> {
-        use lz4::EncoderBuilder;
+        use lz4::block;
 
-        let mut encoder = EncoderBuilder::new().build(Vec::new())?;
-        encoder.write_all(data)?;
-        let (result, _) = encoder.finish();
+        if data.len() > u32::MAX as usize {
+            return Err(anyhow!("LZ4 input too large"));
+        }
+
+        // pgmoneta's `pgmoneta_lz4c_string()` wire format is:
+        //   [4-byte big-endian original_size][raw LZ4 block payload]
+        let compressed = block::compress(data, None, false)?;
+        let mut result = Vec::with_capacity(4 + compressed.len());
+        result.extend_from_slice(&(data.len() as u32).to_be_bytes());
+        result.extend_from_slice(&compressed);
         Ok(result)
     }
 
     fn decompress_lz4(data: &[u8]) -> anyhow::Result<Vec<u8>> {
-        use lz4::Decoder;
+        use lz4::block;
 
-        let mut decoder = Decoder::new(data)?;
-        let mut result = Vec::new();
-        decoder.read_to_end(&mut result)?;
-        Ok(result)
+        if data.len() < 5 {
+            return Err(anyhow!("LZ4 compressed buffer too small"));
+        }
+
+        let expected_size = u32::from_be_bytes([data[0], data[1], data[2], data[3]]) as usize;
+        if expected_size > i32::MAX as usize {
+            return Err(anyhow!("LZ4 decompressed size too large"));
+        }
+
+        // Matches pgmoneta's `pgmoneta_lz4d_string()` format:
+        // first 4 bytes are expected decompressed size in network order.
+        let payload = &data[4..];
+        let decompressed = block::decompress(payload, Some(expected_size as i32))?;
+
+        if decompressed.len() != expected_size {
+            return Err(anyhow!("LZ4 decompressed size mismatch"));
+        }
+
+        Ok(decompressed)
     }
 
     fn compress_bzip2(data: &[u8]) -> anyhow::Result<Vec<u8>> {
