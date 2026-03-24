@@ -13,10 +13,10 @@ pub fn init_config() {
             .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
             .unwrap_or(false);
 
-        let requested_compression = std::env::var("PGMONETA_MCP_COMPRESSION")
-            .unwrap_or_else(|_| "zstd".to_string());
-        let requested_encryption = std::env::var("PGMONETA_MCP_ENCRYPTION")
-            .unwrap_or_else(|_| "aes_256_gcm".to_string());
+        let requested_compression =
+            std::env::var("PGMONETA_MCP_COMPRESSION").unwrap_or_else(|_| "zstd".to_string());
+        let requested_encryption =
+            std::env::var("PGMONETA_MCP_ENCRYPTION").unwrap_or_else(|_| "aes_256_gcm".to_string());
 
         let compression = if force_plain {
             "none".to_string()
