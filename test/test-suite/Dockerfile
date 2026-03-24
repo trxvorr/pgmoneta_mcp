@@ -42,7 +42,7 @@ RUN chmod 755 /usr/bin/run-pgmoneta /usr/bin/run-postgresql /usr/bin/entry
 RUN rpm -Uvh https://dl.fedoraproject.org/pub/epel/epel-release-latest-10.noarch.rpm \
  && rpm -Uvh https://download.postgresql.org/pub/repos/yum/reporpms/EL-10-x86_64/pgdg-redhat-repo-latest.noarch.rpm \
  && dnf -y update \
- && dnf -y install wget tar crontabs \
+ && dnf -y install wget tar crontabs  \
  && dnf -y install postgresql18 postgresql18-server postgresql18-contrib postgresql18-libs \
  && dnf -y install pgmoneta \
  && dnf -y clean all

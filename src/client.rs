@@ -256,6 +256,7 @@ impl PgmonetaClient {
         stream.write_all(payload.as_bytes()).await?;
         stream.flush().await?;
 
+
         tracing::debug!(
             compression = compression,
             encryption = encryption,
@@ -269,6 +270,7 @@ impl PgmonetaClient {
     where
         R: tokio::io::AsyncRead + Unpin,
     {
+
         // Read compression
         let compression = match timeout(Duration::from_secs(10), stream.read_u8()).await {
             Ok(Ok(c)) => c,
@@ -325,6 +327,8 @@ impl PgmonetaClient {
             "[DEBUG] Response frame header received: compression={}, encryption={}, len={}",
             compression, encryption, len
         );
+
+
 
         // Read payload
         let mut buf = vec![0u8; len];
