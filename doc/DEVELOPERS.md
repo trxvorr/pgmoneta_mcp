@@ -109,13 +109,15 @@ Runs only the 20-combination `info_test` matrix.
 bash test/check.sh ci
 ```
 
-### Unit tests only (no container / no pgmoneta)
+### Unit tests only (with clean/build setup)
 
 ```bash
 bash test/check.sh unit
 # alias
 bash test/check.sh unit-only
 ```
+
+This mode performs `clean + build` setup first, then runs `cargo test --lib`.
 
 ### Integration tests only
 

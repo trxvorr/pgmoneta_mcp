@@ -19,7 +19,7 @@ Run `<PATH_TO_PGMONETA>/test/check.sh build` to prepare the test environment (im
 Run `<PATH_TO_PGMONETA_MCP>/test/check.sh test` to run the 20-combination `info_test` matrix and then the full test suite without rebuilding the composed image.
 
 ## Unit tests
-To run unit tests only, simply run `<PATH_TO_PGMONETA_MCP>/test/check.sh unit` (or `<PATH_TO_PGMONETA_MCP>/test/check.sh unit-only`). This mode does not require pgmoneta containers.
+To run unit tests only, simply run `<PATH_TO_PGMONETA_MCP>/test/check.sh unit` (or `<PATH_TO_PGMONETA_MCP>/test/check.sh unit-only`). This mode performs clean + build setup first, then runs unit tests.
 
 ## Integration tests
 To run integration tests only, simply run `<PATH_TO_PGMONETA_MCP>/test/check.sh integration`

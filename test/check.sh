@@ -615,7 +615,7 @@ usage() {
    echo " clean          Clean up test suite environment and remove the composed image"
     echo " test           Starts the composed container, runs 20-mode info_test matrix, then full test suite"
    echo " integration    Starts the composed container and run only integration tests (clean + build + integration)"
-    echo " unit           Run only unit tests (no pgmoneta container required)"
+    echo " unit           Clean + build environment, then run only unit tests"
     echo " unit-only      Alias for 'unit'"
     echo " ci             Run only the 20-mode info_test matrix with CI-specific settings"
    echo " status         Show test environment status (image, container, ports, master key)"
@@ -746,6 +746,9 @@ case "$SUBCOMMAND" in
         fi
         ;;
     unit)
+        cleanup
+        handle_master_key
+        build_test_suite
         if [[ -n "$MODULE_FILTER" ]]; then
             cargo test --lib -- --test-threads=1 --nocapture -- $MODULE_FILTER
         else
