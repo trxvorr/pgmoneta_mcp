@@ -72,6 +72,15 @@ jobs:
         command: clippy
         args: -- -D warnings # Treat clippy warnings as errors
 
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run cargo audit
+        uses: rustsec/audit-check@v1.4.1
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
   full-test:
     runs-on: ubuntu-latest
     container:
