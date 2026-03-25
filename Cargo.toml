@@ -52,7 +52,7 @@ lz4 = "1.24"
 bzip2 = "0.4"
 aes = { version = "0.8", features = ["hazmat"] }
 zeroize = "1.8.2"
-scram = "0.6.0"
+scram = { package = "scram-2", version = "0.7.0" }
 once_cell = "1.21.3"
 clap = { version = "4.5.53", features = ["derive"] }
 chrono = "0.4.42"
